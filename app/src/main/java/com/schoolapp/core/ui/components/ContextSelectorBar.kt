@@ -1,23 +1,43 @@
 package com.schoolapp.core.ui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.FilterAlt
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.schoolapp.core.model.AcademicContext
 import com.schoolapp.core.model.Assessment
 import com.schoolapp.core.model.AssessmentCycle
 import com.schoolapp.core.model.GradeSection
 import com.schoolapp.core.model.Subject
-import com.schoolapp.core.ui.theme.TextSecondary
+import com.schoolapp.core.ui.theme.AccentCyan
+import com.schoolapp.core.ui.theme.PrimaryBlue
 
 @Composable
 fun ContextSelectorBar(
@@ -36,85 +56,151 @@ fun ContextSelectorBar(
     modifier: Modifier = Modifier,
 ) {
     val grades = sections.map { it.grade }.distinct().sorted()
-    val sectionsForGrade = sections
-        .filter { it.grade == context.grade }
-        .sortedBy { it.sectionName }
+    val sectionsForGrade = sections.filter { it.grade == context.grade }.sortedBy { it.sectionName }
     val subjects = context.sectionId?.let { subjectsBySection[it] }.orEmpty()
     val assessments = context.sectionId?.let { assessmentsBySection[it] }.orEmpty()
     val filteredAssessments = if (context.subjectId == null) assessments else assessments.filter { it.subjectId == context.subjectId }
 
-    GlassCard(modifier = modifier.fillMaxWidth()) {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (grades.isNotEmpty()) {
-                Text("Context", style = MaterialTheme.typography.titleSmall)
-                TabRow(
-                    selectedTabIndex = grades.indexOf(context.grade).coerceAtLeast(0),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    grades.forEach { grade ->
-                        Tab(
-                            selected = context.grade == grade,
-                            onClick = { onGradeSelected(grade) },
-                            text = { Text("Grade $grade") },
-                        )
-                    }
-                }
-            }
+    LazyRow(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(PrimaryBlue)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item {
+            Icon(
+                imageVector = Icons.Filled.FilterAlt,
+                contentDescription = "Filters",
+                tint = AccentCyan,
+                modifier = Modifier.size(16.dp),
+            )
+        }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                FormDropdownField(
-                    label = "Section",
-                    options = sectionsForGrade.map {
-                        DropdownOption(it.sectionId, "${it.sectionName} (G${it.grade})")
-                    },
-                    selectedId = context.sectionId,
-                    onSelected = onSectionSelected,
-                    enabled = sectionsForGrade.isNotEmpty(),
-                    modifier = Modifier.weight(1f),
-                )
-                FormDropdownField(
-                    label = "Cycle",
-                    options = cycles.map { DropdownOption(it.cycleId, it.name) },
-                    selectedId = context.cycleId,
-                    onSelected = onCycleSelected,
-                    enabled = cycles.isNotEmpty(),
-                    modifier = Modifier.weight(1f),
-                )
-            }
+        item {
+            ContextPill(
+                shortLabel = "GR",
+                value = context.grade?.toString(),
+                options = grades.map { it.toString() to "Grade $it" },
+                onSelected = { selected -> selected.toIntOrNull()?.let(onGradeSelected) },
+            )
+        }
 
-            if (showSubject) {
-                FormDropdownField(
-                    label = "Subject",
-                    options = subjects.map { DropdownOption(it.subjectId, it.name) },
-                    selectedId = context.subjectId,
+        item { DividerIcon() }
+
+        item {
+            ContextPill(
+                shortLabel = "SEC",
+                value = sectionsForGrade.firstOrNull { it.sectionId == context.sectionId }?.sectionName,
+                options = sectionsForGrade.map { it.sectionId to it.sectionName },
+                onSelected = onSectionSelected,
+            )
+        }
+
+        item { DividerIcon() }
+
+        item {
+            ContextPill(
+                shortLabel = "CYC",
+                value = cycles.firstOrNull { it.cycleId == context.cycleId }?.name,
+                options = cycles.map { it.cycleId to it.name },
+                onSelected = onCycleSelected,
+            )
+        }
+
+        if (showSubject) {
+            item { DividerIcon() }
+            item {
+                ContextPill(
+                    shortLabel = "SUB",
+                    value = subjects.firstOrNull { it.subjectId == context.subjectId }?.name,
+                    options = subjects.map { it.subjectId to it.name },
                     onSelected = onSubjectSelected,
-                    enabled = subjects.isNotEmpty(),
                 )
             }
+        }
 
-            if (showAssessment) {
-                FormDropdownField(
-                    label = "Assessment",
-                    options = filteredAssessments.map {
-                        DropdownOption(
-                            it.assessmentId,
-                            "${it.title} (Max ${"%.0f".format(it.maxMarks)})",
-                        )
-                    },
-                    selectedId = context.assessmentId,
+        if (showAssessment) {
+            item { DividerIcon() }
+            item {
+                ContextPill(
+                    shortLabel = "ASM",
+                    value = filteredAssessments.firstOrNull { it.assessmentId == context.assessmentId }?.title,
+                    options = filteredAssessments.map { it.assessmentId to it.title },
                     onSelected = onAssessmentSelected,
-                    enabled = filteredAssessments.isNotEmpty(),
-                )
-            }
-
-            if (context.sectionId == null) {
-                Text(
-                    text = "Create a section first in Setup.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary,
-                    modifier = Modifier.padding(top = 4.dp),
                 )
             }
         }
     }
+}
+
+@Composable
+private fun ContextPill(
+    shortLabel: String,
+    value: String?,
+    options: List<Pair<String, String>>,
+    onSelected: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.White.copy(alpha = 0.12f))
+                .clickable(enabled = options.isNotEmpty()) { expanded = true }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = shortLabel,
+                color = Color.White.copy(alpha = 0.72f),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = " ${value ?: "Select"}",
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Icon(
+                imageVector = Icons.Filled.ArrowDropDown,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.75f),
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            if (options.isEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("No options") },
+                    onClick = { expanded = false },
+                )
+            } else {
+                options.forEach { (id, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        onClick = {
+                            expanded = false
+                            onSelected(id)
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DividerIcon() {
+    Icon(
+        imageVector = Icons.Filled.ChevronRight,
+        contentDescription = null,
+        tint = Color.White.copy(alpha = 0.35f),
+        modifier = Modifier.size(16.dp),
+    )
 }

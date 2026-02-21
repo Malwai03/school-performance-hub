@@ -19,7 +19,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.schoolapp.core.model.ScoreStatus
 import com.schoolapp.core.ui.theme.DangerRed
+import com.schoolapp.core.ui.theme.DangerRedBg
+import com.schoolapp.core.ui.theme.ExemptGrayBg
 import com.schoolapp.core.ui.theme.SuccessGreen
+import com.schoolapp.core.ui.theme.SuccessGreenBg
 import com.schoolapp.core.ui.theme.TextSecondary
 import com.schoolapp.core.ui.theme.WarningAmber
 
@@ -38,10 +41,15 @@ fun MarksEntryTable(
     rows: List<MarksRowUi>,
     onStatusToggle: (String) -> Unit,
     onMarksChange: (String, String) -> Unit,
+    dense: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    val vSpacing = if (dense) 6.dp else 10.dp
+    val statusWidth = if (dense) 78.dp else 86.dp
+    val marksWidth = if (dense) 88.dp else 96.dp
+
     GlassCard(modifier = modifier.fillMaxWidth()) {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(vSpacing)) {
             Row(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     "Student",
@@ -53,13 +61,13 @@ fun MarksEntryTable(
                     "Status",
                     style = MaterialTheme.typography.labelMedium,
                     color = TextSecondary,
-                    modifier = Modifier.width(86.dp),
+                    modifier = Modifier.width(statusWidth),
                 )
                 Text(
                     "Marks",
                     style = MaterialTheme.typography.labelMedium,
                     color = TextSecondary,
-                    modifier = Modifier.width(96.dp),
+                    modifier = Modifier.width(marksWidth),
                 )
             }
 
@@ -84,17 +92,21 @@ fun MarksEntryTable(
                     ) {
                         Text(
                             text = "${row.rollNumber}. ${row.studentName}",
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = if (dense) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.weight(1f),
                         )
                         AssistChip(
                             onClick = { onStatusToggle(row.studentId) },
                             label = { Text(label, style = MaterialTheme.typography.labelSmall) },
                             colors = AssistChipDefaults.assistChipColors(
-                                containerColor = color.copy(alpha = 0.16f),
+                                containerColor = when (row.status) {
+                                    ScoreStatus.PRESENT -> SuccessGreenBg
+                                    ScoreStatus.ABSENT -> DangerRedBg
+                                    ScoreStatus.EXEMPT -> ExemptGrayBg
+                                },
                                 labelColor = color,
                             ),
-                            modifier = Modifier.width(86.dp),
+                            modifier = Modifier.width(statusWidth),
                         )
                         OutlinedTextField(
                             value = if (isPresent) row.marksDraft else "",
@@ -111,7 +123,7 @@ fun MarksEntryTable(
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             },
-                            modifier = Modifier.width(96.dp),
+                            modifier = Modifier.width(marksWidth),
                         )
                     }
                     row.validationMessage?.let { message ->

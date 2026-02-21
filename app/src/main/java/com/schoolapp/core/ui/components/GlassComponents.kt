@@ -45,17 +45,18 @@ import com.schoolapp.core.model.PassStatus
 import com.schoolapp.core.model.RiskLevel
 import com.schoolapp.core.ui.theme.Background
 import com.schoolapp.core.ui.theme.Border
-import com.schoolapp.core.ui.theme.DangerContainer
+import com.schoolapp.core.ui.theme.DangerRedBg
 import com.schoolapp.core.ui.theme.DangerRed
+import com.schoolapp.core.ui.theme.ExemptGrayBg
 import com.schoolapp.core.ui.theme.Primary
 import com.schoolapp.core.ui.theme.PrimaryLight
-import com.schoolapp.core.ui.theme.SuccessContainer
+import com.schoolapp.core.ui.theme.SuccessGreenBg
 import com.schoolapp.core.ui.theme.SuccessGreen
 import com.schoolapp.core.ui.theme.Surface
 import com.schoolapp.core.ui.theme.TextPrimary
 import com.schoolapp.core.ui.theme.TextSecondary
 import com.schoolapp.core.ui.theme.WarningAmber
-import com.schoolapp.core.ui.theme.WarningContainer
+import com.schoolapp.core.ui.theme.WarningYellowBg
 
 @Composable
 fun GradientBackground(content: @Composable () -> Unit) {
@@ -217,9 +218,9 @@ fun StatRow(label: String, value: String) {
 @Composable
 fun RiskBadge(risk: RiskLevel, modifier: Modifier = Modifier) {
     val (label, fg, bg) = when (risk) {
-        RiskLevel.LOW -> Triple("LOW RISK", SuccessGreen, SuccessContainer)
-        RiskLevel.MEDIUM -> Triple("MED RISK", WarningAmber, WarningContainer)
-        RiskLevel.HIGH -> Triple("HIGH RISK", DangerRed, DangerContainer)
+        RiskLevel.LOW -> Triple("LOW RISK", SuccessGreen, SuccessGreenBg)
+        RiskLevel.MEDIUM -> Triple("MED RISK", WarningAmber, WarningYellowBg)
+        RiskLevel.HIGH -> Triple("HIGH RISK", DangerRed, DangerRedBg)
     }
     Box(modifier.clip(RoundedCornerShape(8.dp)).background(bg).padding(horizontal = 10.dp, vertical = 4.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = fg)
@@ -229,9 +230,9 @@ fun RiskBadge(risk: RiskLevel, modifier: Modifier = Modifier) {
 @Composable
 fun PassStatusBadge(status: PassStatus, modifier: Modifier = Modifier) {
     val (label, fg, bg) = when (status) {
-        PassStatus.PASS -> Triple("PASS", SuccessGreen, SuccessContainer)
-        PassStatus.FAIL -> Triple("FAIL", DangerRed, DangerContainer)
-        PassStatus.INCOMPLETE -> Triple("INCOMPLETE", WarningAmber, WarningContainer)
+        PassStatus.PASS -> Triple("PASS", SuccessGreen, SuccessGreenBg)
+        PassStatus.FAIL -> Triple("FAIL", DangerRed, DangerRedBg)
+        PassStatus.INCOMPLETE -> Triple("INCOMPLETE", WarningAmber, ExemptGrayBg)
     }
     Box(modifier.clip(RoundedCornerShape(8.dp)).background(bg).padding(horizontal = 10.dp, vertical = 4.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = fg)

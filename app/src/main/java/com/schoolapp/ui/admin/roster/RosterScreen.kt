@@ -15,7 +15,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,8 +39,8 @@ import com.schoolapp.core.ui.components.EmptyStateCard
 import com.schoolapp.core.ui.components.FormDropdownField
 import com.schoolapp.core.ui.components.GlassCard
 import com.schoolapp.core.ui.components.SectionHierarchyPanel
-import com.schoolapp.core.ui.components.WizardStepCard
 import com.schoolapp.core.ui.theme.DangerRed
+import com.schoolapp.core.ui.theme.PrimaryBlue
 import com.schoolapp.core.ui.theme.SuccessGreen
 import com.schoolapp.core.ui.theme.TextSecondary
 import com.schoolapp.ui.admin.AdminDashboardState
@@ -46,6 +48,7 @@ import com.schoolapp.ui.admin.AdminViewModel
 import com.schoolapp.ui.admin.profile.StudentProfileScreen
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun RosterScreen(
     state: AdminDashboardState,
     viewModel: AdminViewModel,
@@ -73,6 +76,9 @@ fun RosterScreen(
     var importType by rememberSaveable { mutableStateOf("csv") }
     var selectedImportUri by rememberSaveable { mutableStateOf("") }
     var selectedImportName by rememberSaveable { mutableStateOf("") }
+    var showAddSheet by rememberSaveable { mutableStateOf(false) }
+    var showBatchSheet by rememberSaveable { mutableStateOf(false) }
+    var showImportSheet by rememberSaveable { mutableStateOf(false) }
 
     val context = LocalContext.current
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -100,6 +106,133 @@ fun RosterScreen(
     LaunchedEffect(grades, state.context.grade) {
         if (grades.isNotEmpty() && state.context.grade == null) {
             viewModel.selectContextGrade(grades.first())
+        }
+    }
+
+    if (showAddSheet) {
+        ModalBottomSheet(onDismissRequest = { showAddSheet = false }) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Add Student", style = MaterialTheme.typography.titleMedium)
+                OutlinedTextField(
+                    value = studentName,
+                    onValueChange = { studentName = it },
+                    label = { Text("Student Name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = rollInput,
+                    onValueChange = { rollInput = it.filter { c -> c.isDigit() } },
+                    label = { Text("Roll Number") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                )
+                Button(
+                    onClick = {
+                        viewModel.addStudent(
+                            sectionId = state.context.sectionId.orEmpty(),
+                            fullName = studentName,
+                            rollNumber = rollInput.toIntOrNull() ?: 0,
+                        )
+                        studentName = ""
+                        rollInput = ""
+                        showAddSheet = false
+                    },
+                    enabled = state.context.sectionId != null &&
+                        studentName.isNotBlank() &&
+                        (rollInput.toIntOrNull() ?: 0) > 0,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Save Student")
+                }
+            }
+        }
+    }
+
+    if (showBatchSheet) {
+        ModalBottomSheet(onDismissRequest = { showBatchSheet = false }) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Batch Add Students", style = MaterialTheme.typography.titleMedium)
+                OutlinedTextField(
+                    value = batchStartRoll,
+                    onValueChange = { batchStartRoll = it.filter { c -> c.isDigit() } },
+                    label = { Text("Start Roll Number") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = batchNames,
+                    onValueChange = { batchNames = it },
+                    label = { Text("Names (comma/new line)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                )
+                Button(
+                    onClick = {
+                        viewModel.addStudentsBatch(
+                            sectionId = state.context.sectionId.orEmpty(),
+                            namesRaw = batchNames,
+                            startRoll = batchStartRoll.toIntOrNull() ?: 0,
+                        )
+                        batchNames = ""
+                        showBatchSheet = false
+                    },
+                    enabled = state.context.sectionId != null &&
+                        batchNames.isNotBlank() &&
+                        (batchStartRoll.toIntOrNull() ?: 0) > 0,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Save Batch")
+                }
+            }
+        }
+    }
+
+    if (showImportSheet) {
+        ModalBottomSheet(onDismissRequest = { showImportSheet = false }) {
+            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Import Students", style = MaterialTheme.typography.titleMedium)
+                FormDropdownField(
+                    label = "File Type",
+                    options = listOf(
+                        DropdownOption("csv", "CSV"),
+                        DropdownOption("xlsx", "Excel (.xlsx)"),
+                    ),
+                    selectedId = importType,
+                    onSelected = { importType = it },
+                )
+                Button(
+                    onClick = {
+                        val mimeTypes = if (importType == "xlsx") {
+                            arrayOf(
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                "application/vnd.ms-excel",
+                            )
+                        } else {
+                            arrayOf("text/csv", "text/comma-separated-values", "text/plain")
+                        }
+                        importPicker.launch(mimeTypes)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (selectedImportName.isBlank()) "Pick File" else "Change File")
+                }
+                if (selectedImportName.isNotBlank()) {
+                    Text("Selected: $selectedImportName", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
+                }
+                Button(
+                    onClick = {
+                        viewModel.importData(selectedImportUri, importType, "students")
+                        showImportSheet = false
+                    },
+                    enabled = selectedImportUri.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Start Import")
+                }
+            }
         }
     }
 
@@ -137,6 +270,14 @@ fun RosterScreen(
         }
 
         item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = { showAddSheet = true }, modifier = Modifier.weight(1f)) { Text("Add Student") }
+                Button(onClick = { showBatchSheet = true }, modifier = Modifier.weight(1f)) { Text("Batch Add") }
+                Button(onClick = { showImportSheet = true }, modifier = Modifier.weight(1f)) { Text("Import") }
+            }
+        }
+
+        item {
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
@@ -147,142 +288,11 @@ fun RosterScreen(
             )
         }
 
-        item {
-            WizardStepCard(
-                stepNumber = 1,
-                title = "Add Student",
-                subtitle = "Fast single-student entry for current section.",
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = studentName,
-                        onValueChange = { studentName = it },
-                        label = { Text("Student Name") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = rollInput,
-                        onValueChange = { rollInput = it.filter { c -> c.isDigit() } },
-                        label = { Text("Roll Number") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Button(
-                        onClick = {
-                            viewModel.addStudent(
-                                sectionId = state.context.sectionId.orEmpty(),
-                                fullName = studentName,
-                                rollNumber = rollInput.toIntOrNull() ?: 0,
-                            )
-                            studentName = ""
-                            rollInput = ""
-                        },
-                        enabled = state.context.sectionId != null &&
-                            studentName.isNotBlank() &&
-                            (rollInput.toIntOrNull() ?: 0) > 0,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Add Student")
-                    }
-                }
-            }
-        }
-
-        item {
-            WizardStepCard(
-                stepNumber = 2,
-                title = "Batch Add Students",
-                subtitle = "Comma or new-line list, roll numbers auto increment.",
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = batchStartRoll,
-                        onValueChange = { batchStartRoll = it.filter { c -> c.isDigit() } },
-                        label = { Text("Start Roll Number") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = batchNames,
-                        onValueChange = { batchNames = it },
-                        label = { Text("Names (comma/new line)") },
-                        minLines = 3,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Button(
-                        onClick = {
-                            viewModel.addStudentsBatch(
-                                sectionId = state.context.sectionId.orEmpty(),
-                                namesRaw = batchNames,
-                                startRoll = batchStartRoll.toIntOrNull() ?: 0,
-                            )
-                            batchNames = ""
-                        },
-                        enabled = state.context.sectionId != null &&
-                            batchNames.isNotBlank() &&
-                            (batchStartRoll.toIntOrNull() ?: 0) > 0,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Add Batch")
-                    }
-                }
-            }
-        }
-
-        item {
-            WizardStepCard(
-                stepNumber = 3,
-                title = "Import Students",
-                subtitle = "Upload CSV/XLSX into this school directly.",
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FormDropdownField(
-                        label = "File Type",
-                        options = listOf(
-                            DropdownOption("csv", "CSV"),
-                            DropdownOption("xlsx", "Excel (.xlsx)"),
-                        ),
-                        selectedId = importType,
-                        onSelected = { importType = it },
-                    )
-                    Button(
-                        onClick = {
-                            val mimeTypes = if (importType == "xlsx") {
-                                arrayOf(
-                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    "application/vnd.ms-excel",
-                                )
-                            } else {
-                                arrayOf("text/csv", "text/comma-separated-values", "text/plain")
-                            }
-                            importPicker.launch(mimeTypes)
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(if (selectedImportName.isBlank()) "Pick File" else "Change File")
-                    }
-                    if (selectedImportName.isNotBlank()) {
-                        Text("Selected: $selectedImportName", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                    }
-                    Button(
-                        onClick = { viewModel.importData(selectedImportUri, importType, "students") },
-                        enabled = selectedImportUri.isNotBlank(),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Import Students")
-                    }
-                }
-            }
-        }
-
         if (filtered.isEmpty()) {
             item {
                 EmptyStateCard(
                     title = "No students in current section",
-                    description = "Use Add/Batch/Import above to populate the roster.",
+                    description = "Use Add/Batch/Import actions to populate roster.",
                 )
             }
         } else {

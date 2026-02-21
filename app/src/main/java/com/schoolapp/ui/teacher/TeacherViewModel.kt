@@ -158,6 +158,26 @@ class TeacherViewModel(
         )
     }
 
+    fun applyBulkStatus(status: ScoreStatus) {
+        val map = _uiState.value.students.associate { it.studentId to status }
+        _uiState.value = _uiState.value.copy(absenceStatus = map)
+    }
+
+    fun applyBulkMarks(value: String) {
+        val state = _uiState.value
+        val parsed = value.toDoubleOrNull()
+        val max = state.maxMarks
+        if (parsed == null || parsed < 0 || (max != null && parsed > max)) {
+            _uiState.value = state.copy(error = "Enter valid bulk marks", info = null)
+            return
+        }
+        val map = state.students.associate { student ->
+            val status = state.absenceStatus[student.studentId] ?: ScoreStatus.PRESENT
+            student.studentId to if (status == ScoreStatus.PRESENT) value else ""
+        }
+        _uiState.value = state.copy(scoreDrafts = map, error = null, info = null)
+    }
+
     fun saveScores() {
         val state = _uiState.value
         val assessmentId = state.selectedAssessmentId

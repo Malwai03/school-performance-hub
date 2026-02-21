@@ -38,13 +38,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.schoolapp.core.model.PassStatus
 import com.schoolapp.core.ui.components.AppTopBar
 import com.schoolapp.core.ui.components.GlassCard
+import com.schoolapp.core.ui.components.KpiCard
 import com.schoolapp.core.ui.components.PassStatusBadge
 import com.schoolapp.core.ui.components.ProgressRing
 import com.schoolapp.core.ui.components.RiskBadge
 import com.schoolapp.core.ui.components.Sparkline
 import com.schoolapp.core.ui.components.StatRow
 import com.schoolapp.core.ui.theme.DangerRed
-import com.schoolapp.core.ui.theme.Primary
+import com.schoolapp.core.ui.theme.PrimaryBlue
 import com.schoolapp.core.ui.theme.SuccessGreen
 import com.schoolapp.core.ui.theme.TextSecondary
 import com.schoolapp.core.ui.theme.WarningAmber
@@ -162,6 +163,34 @@ private fun OverviewTab(state: StudentDashboardState, onLogout: () -> Unit) {
             }
         }
 
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                KpiCard(
+                    title = "Section Avg",
+                    value = "${"%.1f".format(state.sectionAverage)}%",
+                    accent = PrimaryBlue,
+                    modifier = Modifier.weight(1f),
+                )
+                KpiCard(
+                    title = "Band",
+                    value = when {
+                        state.rankHint.startsWith("Top", ignoreCase = true) -> "Top"
+                        state.rankHint.startsWith("Mid", ignoreCase = true) -> "Mid"
+                        else -> "Improve"
+                    },
+                    accent = when {
+                        state.rankHint.startsWith("Top", ignoreCase = true) -> SuccessGreen
+                        state.rankHint.startsWith("Mid", ignoreCase = true) -> PrimaryBlue
+                        else -> DangerRed
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
         // Error / Info
         state.error?.let { message ->
             item { Text(message, color = DangerRed, style = MaterialTheme.typography.bodySmall) }
@@ -205,7 +234,7 @@ private fun SubjectsTab(state: StudentDashboardState) {
                 val pct = entry.value
                 val valueColor = when {
                     pct >= 75 -> SuccessGreen
-                    pct >= 33 -> Primary
+                    pct >= 33 -> PrimaryBlue
                     else -> DangerRed
                 }
                 GlassCard(modifier = Modifier.fillMaxWidth()) {
