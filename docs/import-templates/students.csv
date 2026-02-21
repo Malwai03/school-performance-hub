@@ -1,0 +1,3 @@
+studentId,schoolId,sectionId,rollNumber,fullName,active
+student-101,school_001,g6_a,1,Anita Rao,true
+student-102,school_001,g6_a,2,Ravi Singh,true

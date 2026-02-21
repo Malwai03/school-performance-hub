@@ -1,0 +1,135 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userPath(schoolId) {
+      return /databases/$(database)/documents/schools/$(schoolId)/users/$(request.auth.uid);
+    }
+
+    function hasUserRecord(schoolId) {
+      return signedIn() && exists(userPath(schoolId));
+    }
+
+    function userData(schoolId) {
+      return get(userPath(schoolId)).data;
+    }
+
+    function isAdmin(schoolId) {
+      return hasUserRecord(schoolId) && userData(schoolId).role == "ADMIN";
+    }
+
+    function isTeacher(schoolId) {
+      return hasUserRecord(schoolId) && userData(schoolId).role == "TEACHER";
+    }
+
+    function isStudent(schoolId) {
+      return hasUserRecord(schoolId) && userData(schoolId).role == "STUDENT";
+    }
+
+    function isStudentSelf(schoolId, studentId) {
+      return isStudent(schoolId) && (
+        userData(schoolId).studentId == studentId || request.auth.uid == studentId
+      );
+    }
+
+    function assessmentDoc(schoolId, assessmentId) {
+      return get(/databases/$(database)/documents/schools/$(schoolId)/assessments/$(assessmentId)).data;
+    }
+
+    function teacherAssignmentDocId(sectionId, subjectId) {
+      return sectionId + "_" + subjectId + "_" + request.auth.uid;
+    }
+
+    function isAssignedTeacherForAssessment(schoolId, assessmentId) {
+      let assessment = assessmentDoc(schoolId, assessmentId);
+      return isTeacher(schoolId) && assessment != null && exists(
+        /databases/$(database)/documents/schools/$(schoolId)/teacherAssignments/$(teacherAssignmentDocId(assessment.sectionId, assessment.subjectId))
+      );
+    }
+
+    function hasValidScoreBounds(schoolId, assessmentId, marks) {
+      let assessment = assessmentDoc(schoolId, assessmentId);
+      return assessment != null && marks >= 0 && marks <= assessment.maxMarks;
+    }
+
+    match /schools/{schoolId} {
+      allow read: if signedIn() && hasUserRecord(schoolId);
+      allow write: if isAdmin(schoolId);
+
+      match /users/{uid} {
+        allow read: if isAdmin(schoolId) || (signedIn() && request.auth.uid == uid && hasUserRecord(schoolId));
+        allow create, update, delete: if isAdmin(schoolId);
+      }
+
+      match /sections/{sectionId} {
+        allow read: if hasUserRecord(schoolId);
+        allow create, update, delete: if isAdmin(schoolId);
+      }
+
+      match /subjects/{subjectId} {
+        allow read: if hasUserRecord(schoolId);
+        allow create, update, delete: if isAdmin(schoolId);
+      }
+
+      match /students/{studentId} {
+        allow read: if isAdmin(schoolId) || isTeacher(schoolId) || isStudentSelf(schoolId, studentId);
+        allow create, update, delete: if isAdmin(schoolId);
+      }
+
+      match /teacherAssignments/{assignmentId} {
+        allow read: if isAdmin(schoolId) || isTeacher(schoolId);
+        allow create, update, delete: if isAdmin(schoolId);
+      }
+
+      match /assessmentCycles/{cycleId} {
+        allow read: if hasUserRecord(schoolId);
+        allow create: if isAdmin(schoolId) && request.resource.data.published != true;
+        allow update: if isAdmin(schoolId) && !(
+          request.resource.data.published == true && resource.data.published != true
+        );
+        allow delete: if isAdmin(schoolId);
+      }
+
+      match /assessments/{assessmentId} {
+        allow read: if hasUserRecord(schoolId);
+        allow create, update, delete: if isAdmin(schoolId);
+      }
+
+      match /scores/{scoreId} {
+        allow read: if isAdmin(schoolId) || isTeacher(schoolId) || (
+          isStudent(schoolId) && resource.data.studentId == userData(schoolId).studentId
+        );
+
+        allow create, update: if (
+          isAdmin(schoolId) ||
+          (
+            isAssignedTeacherForAssessment(schoolId, request.resource.data.assessmentId) &&
+            hasValidScoreBounds(schoolId, request.resource.data.assessmentId, request.resource.data.obtainedMarks)
+          )
+        );
+
+        allow delete: if isAdmin(schoolId);
+      }
+
+      match /resultSnapshots/{snapshotId} {
+        allow read: if isAdmin(schoolId) || isTeacher(schoolId) || (
+          isStudent(schoolId) && resource.data.studentId == userData(schoolId).studentId
+        );
+        allow create, update, delete: if false;
+      }
+
+      match /sectionAnalytics/{docId} {
+        allow read: if hasUserRecord(schoolId);
+        allow write: if false;
+      }
+
+      match /imports/{importId} {
+        allow read, create, update, delete: if isAdmin(schoolId);
+      }
+    }
+  }
+}

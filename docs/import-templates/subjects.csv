@@ -1,0 +1,3 @@
+subjectId,schoolId,grade,name,passThresholdPct,mandatory
+sub_math_6,school_001,6,Mathematics,33,true
+sub_sci_6,school_001,6,Science,33,true
