@@ -3,12 +3,10 @@ package com.schoolapp.ui.admin
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ViewList
-import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -19,11 +17,10 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.schoolapp.core.model.AdminDestination
 import com.schoolapp.core.ui.components.AppTopBar
-import com.schoolapp.core.ui.theme.TextSecondary
 import com.schoolapp.ui.admin.dashboard.AdminDashboardScreen
 import com.schoolapp.ui.admin.gradebook.GradebookScreen
+import com.schoolapp.ui.admin.profile.AdminProfileScreen
 import com.schoolapp.ui.admin.roster.RosterScreen
-import com.schoolapp.ui.admin.setup.SetupWizardScreen
 
 @Composable
 fun AdminRootScreen(
@@ -36,15 +33,10 @@ fun AdminRootScreen(
         topBar = {
             AppTopBar(
                 title = when (state.destination) {
-                    AdminDestination.DASHBOARD -> "Admin Dashboard"
-                    AdminDestination.ROSTER -> "Roster"
-                    AdminDestination.GRADEBOOK -> "Gradebook"
-                    AdminDestination.SETUP -> "Setup"
-                },
-                actions = {
-                    IconButton(onClick = onLogout) {
-                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Logout", tint = TextSecondary)
-                    }
+                    AdminDestination.DASHBOARD -> "Dashboard"
+                    AdminDestination.ROSTER -> "Manage"
+                    AdminDestination.GRADEBOOK -> "Mass Entry"
+                    AdminDestination.SETUP -> "Profile"
                 },
             )
         },
@@ -60,19 +52,19 @@ fun AdminRootScreen(
                     selected = state.destination == AdminDestination.ROSTER,
                     onClick = { viewModel.navigateTo(AdminDestination.ROSTER) },
                     icon = { Icon(Icons.AutoMirrored.Filled.ViewList, contentDescription = null) },
-                    label = { Text("Roster") },
+                    label = { Text("Manage") },
                 )
                 NavigationBarItem(
                     selected = state.destination == AdminDestination.GRADEBOOK,
                     onClick = { viewModel.navigateTo(AdminDestination.GRADEBOOK) },
                     icon = { Icon(Icons.Filled.TableChart, contentDescription = null) },
-                    label = { Text("Gradebook") },
+                    label = { Text("Mass Fill") },
                 )
                 NavigationBarItem(
                     selected = state.destination == AdminDestination.SETUP,
                     onClick = { viewModel.navigateTo(AdminDestination.SETUP) },
-                    icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
-                    label = { Text("Setup") },
+                    icon = { Icon(Icons.Filled.Person, contentDescription = null) },
+                    label = { Text("Profile") },
                 )
             }
         },
@@ -96,9 +88,9 @@ fun AdminRootScreen(
                 modifier = Modifier.padding(padding),
             )
 
-            AdminDestination.SETUP -> SetupWizardScreen(
+            AdminDestination.SETUP -> AdminProfileScreen(
                 state = state,
-                viewModel = viewModel,
+                onLogout = onLogout,
                 modifier = Modifier.padding(padding),
             )
         }

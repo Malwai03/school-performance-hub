@@ -4,11 +4,11 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -28,6 +28,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -64,7 +65,7 @@ fun SetupWizardScreen(
     viewModel: AdminViewModel,
     modifier: Modifier = Modifier,
 ) {
-    var activeStep by rememberSaveable { mutableIntStateOf(1) }
+    var activeStep by rememberSaveable { mutableIntStateOf(2) }
 
     var sectionGrade by rememberSaveable { mutableStateOf(state.context.grade?.toString() ?: "6") }
     var sectionName by rememberSaveable { mutableStateOf("A") }
@@ -125,6 +126,7 @@ fun SetupWizardScreen(
                 subjectsBySection = state.subjectsBySection,
                 assessmentsBySection = state.assessmentsBySection,
                 context = state.context,
+                showCycle = false,
                 showSubject = false,
                 showAssessment = false,
                 onGradeSelected = viewModel::selectContextGrade,
@@ -175,9 +177,9 @@ fun SetupWizardScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp),
+                        .height(40.dp),
                 ) {
-                    Text("Save & Continue", fontWeight = FontWeight.Bold)
+                    Text("Save & Continue", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
         }
@@ -227,9 +229,9 @@ fun SetupWizardScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp),
+                        .height(40.dp),
                 ) {
-                    Text("Save & Continue", fontWeight = FontWeight.Bold)
+                    Text("Save & Continue", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
         }
@@ -249,7 +251,7 @@ fun SetupWizardScreen(
                     value = cycleName,
                     onValueChange = { cycleName = it },
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                     CalendarDateField(
                         label = "Start Date",
                         valueIsoDate = cycleStart,
@@ -375,9 +377,9 @@ fun SetupWizardScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp),
+                        .height(40.dp),
                 ) {
-                    Text("Save & Continue", fontWeight = FontWeight.Bold)
+                    Text("Save & Continue", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
         }
@@ -436,9 +438,9 @@ fun SetupWizardScreen(
                     colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp),
+                        .height(40.dp),
                 ) {
-                    Text("Start Import", fontWeight = FontWeight.Bold)
+                    Text("Start Import", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
         }
@@ -455,15 +457,15 @@ private fun CollapsibleStepCard(
     onEditClick: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    val borderColor = when {
+    val accentColor = when {
         isExpanded -> PrimaryBlue
         isCompleted -> SuccessGreen
         else -> BorderGray
     }
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(8.dp),
         color = SurfaceWhite,
-        shadowElevation = if (isExpanded) 4.dp else 0.dp,
+        shadowElevation = if (isExpanded) 2.dp else 0.dp,
         border = androidx.compose.foundation.BorderStroke(1.dp, BorderGray),
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -471,10 +473,10 @@ private fun CollapsibleStepCard(
             Box(
                 modifier = Modifier
                     .width(4.dp)
-                    .fillMaxSize()
-                    .background(borderColor),
+                    .defaultMinSize(minHeight = 48.dp)
+                    .background(accentColor),
             )
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -483,10 +485,10 @@ private fun CollapsibleStepCard(
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(
                             modifier = Modifier
-                                .size(24.dp)
+                                .size(20.dp)
                                 .background(
                                     color = if (isCompleted) SuccessGreen else if (isExpanded) PrimaryBlue else BorderGray,
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = RoundedCornerShape(10.dp),
                                 ),
                             contentAlignment = Alignment.Center,
                         ) {
@@ -495,23 +497,28 @@ private fun CollapsibleStepCard(
                                     imageVector = Icons.Filled.Check,
                                     contentDescription = null,
                                     tint = Color.White,
-                                    modifier = Modifier.size(16.dp),
+                                    modifier = Modifier.size(12.dp),
                                 )
                             } else {
                                 Text(
                                     stepNumber.toString(),
                                     color = if (isExpanded) Color.White else TextSecondary,
-                                    fontSize = 12.sp,
+                                    fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                 )
                             }
                         }
-                        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            text = title,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = TextPrimary,
+                        )
                     }
                     if (isCompleted && !isExpanded) {
                         Text(
                             "Edit",
-                            color = TextSecondary,
+                            color = PrimaryBlue,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.clickable(onClick = onEditClick),
@@ -520,15 +527,15 @@ private fun CollapsibleStepCard(
                 }
 
                 if (isExpanded) {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 14.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 12.dp)) {
                         content()
                     }
                 } else if (summaryText.isNotBlank()) {
                     Text(
                         summaryText,
-                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 13.sp,
                         color = TextSecondary,
-                        modifier = Modifier.padding(top = 8.dp, start = 34.dp),
+                        modifier = Modifier.padding(top = 4.dp, start = 30.dp),
                     )
                 }
             }
@@ -546,15 +553,23 @@ private fun DataEntryField(
     keyboardType: KeyboardType = KeyboardType.Text,
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextSecondary)
+        Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextSecondary)
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
-            placeholder = { Text(placeholder, fontSize = 14.sp, color = TextSecondary) },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
+            placeholder = { Text(placeholder, fontSize = 13.sp, color = TextSecondary) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp),
+            shape = RoundedCornerShape(8.dp),
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = SurfaceBackground,
+                unfocusedContainerColor = SurfaceBackground,
+                focusedIndicatorColor = PrimaryBlue,
+                unfocusedIndicatorColor = BorderGray,
+            ),
         )
     }
 }

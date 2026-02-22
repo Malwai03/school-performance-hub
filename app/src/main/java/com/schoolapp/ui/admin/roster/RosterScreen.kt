@@ -1,118 +1,314 @@
 package com.schoolapp.ui.admin.roster
 
-import android.content.Intent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.schoolapp.core.ui.components.ContextSelectorBar
 import com.schoolapp.core.ui.components.DropdownOption
 import com.schoolapp.core.ui.components.EmptyStateCard
 import com.schoolapp.core.ui.components.FormDropdownField
 import com.schoolapp.core.ui.components.GlassCard
-import com.schoolapp.core.ui.components.SectionHierarchyPanel
 import com.schoolapp.core.ui.theme.DangerRed
-import com.schoolapp.core.ui.theme.PrimaryBlue
 import com.schoolapp.core.ui.theme.SuccessGreen
+import com.schoolapp.core.ui.theme.SurfaceBackground
 import com.schoolapp.core.ui.theme.TextSecondary
 import com.schoolapp.ui.admin.AdminDashboardState
 import com.schoolapp.ui.admin.AdminViewModel
-import com.schoolapp.ui.admin.profile.StudentProfileScreen
 
 @Composable
-@OptIn(ExperimentalMaterial3Api::class)
 fun RosterScreen(
     state: AdminDashboardState,
     viewModel: AdminViewModel,
     modifier: Modifier = Modifier,
 ) {
-    if (state.selectedStudentProfileId != null) {
-        StudentProfileScreen(
-            state = state,
-            viewModel = viewModel,
-            modifier = modifier,
-        )
-        return
-    }
+    val sectionOptions = state.sections
+        .sortedWith(compareBy({ it.grade }, { it.sectionName }))
+        .map { DropdownOption(it.sectionId, "Grade ${it.grade} - ${it.sectionName}") }
 
-    val selectedSectionId = state.context.sectionId
-    val studentsInSection = selectedSectionId?.let { state.studentsBySection[it] }
+    var selectedSectionId by rememberSaveable { mutableStateOf("new") }
+    var sectionGrade by rememberSaveable { mutableStateOf((state.context.grade ?: 6).toString()) }
+    var sectionName by rememberSaveable { mutableStateOf("") }
+
+    var subjectSectionId by rememberSaveable { mutableStateOf(state.context.sectionId.orEmpty()) }
+    var selectedSubjectId by rememberSaveable { mutableStateOf("new") }
+    var subjectName by rememberSaveable { mutableStateOf("") }
+    var subjectPassThreshold by rememberSaveable { mutableStateOf("33") }
+    var subjectMandatory by rememberSaveable { mutableStateOf(true) }
+
+    var studentSectionId by rememberSaveable { mutableStateOf(state.context.sectionId.orEmpty()) }
+    var selectedStudentId by rememberSaveable { mutableStateOf("new") }
+    var studentName by rememberSaveable { mutableStateOf("") }
+    var studentRoll by rememberSaveable { mutableStateOf("") }
+
+    var promoteFromSectionId by rememberSaveable { mutableStateOf(state.context.sectionId.orEmpty()) }
+    var promoteToSectionId by rememberSaveable { mutableStateOf("") }
+
+    val subjectOptions = subjectSectionId.takeIf { it.isNotBlank() }
+        ?.let { state.subjectsBySection[it].orEmpty() }
+        .orEmpty()
+        .sortedBy { it.name }
+        .map { DropdownOption(it.subjectId, it.name) }
+    val studentOptions = studentSectionId.takeIf { it.isNotBlank() }
+        ?.let { state.studentsBySection[it].orEmpty() }
         .orEmpty()
         .sortedBy { it.rollNumber }
+        .map { DropdownOption(it.studentId, "${it.rollNumber}. ${it.fullName}") }
 
-    var searchQuery by rememberSaveable { mutableStateOf("") }
-    var studentName by rememberSaveable { mutableStateOf("") }
-    var rollInput by rememberSaveable { mutableStateOf("") }
-    var batchNames by rememberSaveable { mutableStateOf("") }
-    var batchStartRoll by rememberSaveable { mutableStateOf("1") }
-    var importType by rememberSaveable { mutableStateOf("csv") }
-    var selectedImportUri by rememberSaveable { mutableStateOf("") }
-    var selectedImportName by rememberSaveable { mutableStateOf("") }
-    var showAddSheet by rememberSaveable { mutableStateOf(false) }
-    var showBatchSheet by rememberSaveable { mutableStateOf(false) }
-    var showImportSheet by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(state.context.sectionId, state.context.grade, state.sections) {
+        if (selectedSectionId == "new") {
+            sectionGrade = (state.context.grade ?: state.sections.firstOrNull()?.grade ?: 6).toString()
+            sectionName = ""
+        }
+        if (subjectSectionId.isBlank()) {
+            subjectSectionId = state.context.sectionId.orEmpty()
+        }
+        if (studentSectionId.isBlank()) {
+            studentSectionId = state.context.sectionId.orEmpty()
+        }
+        if (promoteFromSectionId.isBlank()) {
+            promoteFromSectionId = state.context.sectionId.orEmpty()
+        }
+    }
 
-    val context = LocalContext.current
-    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+    LaunchedEffect(selectedSectionId, state.sections) {
+        val selected = state.sections.firstOrNull { it.sectionId == selectedSectionId }
+        if (selected != null) {
+            sectionGrade = selected.grade.toString()
+            sectionName = selected.sectionName
+            if (subjectSectionId.isBlank()) subjectSectionId = selected.sectionId
+            if (studentSectionId.isBlank()) studentSectionId = selected.sectionId
+        }
+    }
+
+    LaunchedEffect(selectedSubjectId, subjectSectionId, state.subjectsBySection) {
+        val selected = state.subjectsBySection[subjectSectionId].orEmpty().firstOrNull { it.subjectId == selectedSubjectId }
+        if (selected != null) {
+            subjectName = selected.name
+            subjectPassThreshold = selected.passThresholdPct.toString()
+            subjectMandatory = selected.mandatory
+        } else if (selectedSubjectId == "new") {
+            subjectName = ""
+            subjectPassThreshold = "33"
+            subjectMandatory = true
+        }
+    }
+
+    LaunchedEffect(selectedStudentId, studentSectionId, state.studentsBySection) {
+        val selected = state.studentsBySection.values.flatten().firstOrNull { it.studentId == selectedStudentId }
+        if (selected != null) {
+            studentName = selected.fullName
+            studentRoll = selected.rollNumber.toString()
+            studentSectionId = selected.sectionId
+        } else if (selectedStudentId == "new") {
+            studentName = ""
+            studentRoll = ""
+        }
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(SurfaceBackground)
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        GlassCard(Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Manage School Data", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Create/edit classes, sections, students, subjects, and promote students.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
                 )
+                if (state.sections.isEmpty()) {
+                    EmptyStateCard(
+                        title = "No classes or sections",
+                        description = "Create your first class/section below.",
+                    )
+                } else {
+                    state.sections
+                        .sortedWith(compareBy({ it.grade }, { it.sectionName }))
+                        .forEach { section ->
+                            val count = state.studentsBySection[section.sectionId].orEmpty().size
+                            Text(
+                                text = "Grade ${section.grade} - ${section.sectionName} ($count students)",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                }
             }
-            selectedImportUri = uri.toString()
-            selectedImportName = uri.lastPathSegment.orEmpty()
         }
-    }
 
-    val filtered = remember(studentsInSection, searchQuery) {
-        studentsInSection.filter { student ->
-            if (searchQuery.isBlank()) return@filter true
-            student.fullName.contains(searchQuery.trim(), ignoreCase = true) ||
-                student.rollNumber.toString().contains(searchQuery.trim())
+        GlassCard(Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Classes and Sections", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                FormDropdownField(
+                    label = "Select Existing",
+                    options = listOf(DropdownOption("new", "Create New")) + sectionOptions,
+                    selectedId = selectedSectionId,
+                    onSelected = { selectedSectionId = it },
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = sectionGrade,
+                        onValueChange = { sectionGrade = it.filter { c -> c.isDigit() }.take(2) },
+                        label = { Text("Class (1-10)") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = sectionName,
+                        onValueChange = { sectionName = it.take(3) },
+                        label = { Text("Section") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = {
+                            val grade = sectionGrade.toIntOrNull() ?: 0
+                            if (selectedSectionId == "new") {
+                                viewModel.createSection(grade = grade, sectionName = sectionName)
+                            } else {
+                                viewModel.updateSection(sectionId = selectedSectionId, grade = grade, sectionName = sectionName)
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = (sectionGrade.toIntOrNull() ?: 0) in 1..10 && sectionName.isNotBlank(),
+                    ) {
+                        Text(if (selectedSectionId == "new") "Add" else "Edit")
+                    }
+                    Button(
+                        onClick = { viewModel.deleteSection(selectedSectionId) },
+                        modifier = Modifier.weight(1f),
+                        enabled = selectedSectionId != "new",
+                    ) {
+                        Text("Delete")
+                    }
+                }
+            }
         }
-    }
 
-    val grades = state.sections.map { it.grade }.distinct().sorted()
-    LaunchedEffect(grades, state.context.grade) {
-        if (grades.isNotEmpty() && state.context.grade == null) {
-            viewModel.selectContextGrade(grades.first())
+        GlassCard(Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Subjects", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                FormDropdownField(
+                    label = "Section",
+                    options = sectionOptions,
+                    selectedId = subjectSectionId.ifBlank { null },
+                    onSelected = { subjectSectionId = it },
+                    enabled = sectionOptions.isNotEmpty(),
+                )
+                FormDropdownField(
+                    label = "Select Existing Subject",
+                    options = listOf(DropdownOption("new", "Create New")) + subjectOptions,
+                    selectedId = selectedSubjectId,
+                    onSelected = { selectedSubjectId = it },
+                    enabled = subjectSectionId.isNotBlank(),
+                )
+                OutlinedTextField(
+                    value = subjectName,
+                    onValueChange = { subjectName = it },
+                    label = { Text("Subject Name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = subjectPassThreshold,
+                        onValueChange = { subjectPassThreshold = it.filter { c -> c.isDigit() || c == '.' } },
+                        label = { Text("Pass %") },
+                        modifier = Modifier.weight(1f),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                    )
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("Mandatory", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 14.dp))
+                        Switch(checked = subjectMandatory, onCheckedChange = { subjectMandatory = it })
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = {
+                            if (selectedSubjectId == "new") {
+                                viewModel.createSubject(
+                                    sectionId = subjectSectionId,
+                                    subjectName = subjectName,
+                                    passThreshold = subjectPassThreshold.toDoubleOrNull() ?: 33.0,
+                                    mandatory = subjectMandatory,
+                                )
+                            } else {
+                                viewModel.updateSubject(
+                                    subjectId = selectedSubjectId,
+                                    sectionId = subjectSectionId,
+                                    subjectName = subjectName,
+                                    passThreshold = subjectPassThreshold.toDoubleOrNull() ?: 33.0,
+                                    mandatory = subjectMandatory,
+                                )
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = subjectSectionId.isNotBlank() && subjectName.isNotBlank(),
+                    ) {
+                        Text(if (selectedSubjectId == "new") "Add" else "Edit")
+                    }
+                    Button(
+                        onClick = { viewModel.deleteSubject(selectedSubjectId) },
+                        modifier = Modifier.weight(1f),
+                        enabled = selectedSubjectId != "new",
+                    ) {
+                        Text("Delete")
+                    }
+                }
+            }
         }
-    }
 
-    if (showAddSheet) {
-        ModalBottomSheet(onDismissRequest = { showAddSheet = false }) {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Add Student", style = MaterialTheme.typography.titleMedium)
+        GlassCard(Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Students", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                FormDropdownField(
+                    label = "Section",
+                    options = sectionOptions,
+                    selectedId = studentSectionId.ifBlank { null },
+                    onSelected = { studentSectionId = it },
+                    enabled = sectionOptions.isNotEmpty(),
+                )
+                FormDropdownField(
+                    label = "Select Existing Student",
+                    options = listOf(DropdownOption("new", "Create New")) + studentOptions,
+                    selectedId = selectedStudentId,
+                    onSelected = { selectedStudentId = it },
+                    enabled = studentSectionId.isNotBlank(),
+                )
                 OutlinedTextField(
                     value = studentName,
                     onValueChange = { studentName = it },
@@ -121,213 +317,81 @@ fun RosterScreen(
                     singleLine = true,
                 )
                 OutlinedTextField(
-                    value = rollInput,
-                    onValueChange = { rollInput = it.filter { c -> c.isDigit() } },
+                    value = studentRoll,
+                    onValueChange = { studentRoll = it.filter { c -> c.isDigit() } },
                     label = { Text("Roll Number") },
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                 )
-                Button(
-                    onClick = {
-                        viewModel.addStudent(
-                            sectionId = state.context.sectionId.orEmpty(),
-                            fullName = studentName,
-                            rollNumber = rollInput.toIntOrNull() ?: 0,
-                        )
-                        studentName = ""
-                        rollInput = ""
-                        showAddSheet = false
-                    },
-                    enabled = state.context.sectionId != null &&
-                        studentName.isNotBlank() &&
-                        (rollInput.toIntOrNull() ?: 0) > 0,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Save Student")
-                }
-            }
-        }
-    }
-
-    if (showBatchSheet) {
-        ModalBottomSheet(onDismissRequest = { showBatchSheet = false }) {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Batch Add Students", style = MaterialTheme.typography.titleMedium)
-                OutlinedTextField(
-                    value = batchStartRoll,
-                    onValueChange = { batchStartRoll = it.filter { c -> c.isDigit() } },
-                    label = { Text("Start Roll Number") },
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = batchNames,
-                    onValueChange = { batchNames = it },
-                    label = { Text("Names (comma/new line)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 3,
-                )
-                Button(
-                    onClick = {
-                        viewModel.addStudentsBatch(
-                            sectionId = state.context.sectionId.orEmpty(),
-                            namesRaw = batchNames,
-                            startRoll = batchStartRoll.toIntOrNull() ?: 0,
-                        )
-                        batchNames = ""
-                        showBatchSheet = false
-                    },
-                    enabled = state.context.sectionId != null &&
-                        batchNames.isNotBlank() &&
-                        (batchStartRoll.toIntOrNull() ?: 0) > 0,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Save Batch")
-                }
-            }
-        }
-    }
-
-    if (showImportSheet) {
-        ModalBottomSheet(onDismissRequest = { showImportSheet = false }) {
-            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Import Students", style = MaterialTheme.typography.titleMedium)
-                FormDropdownField(
-                    label = "File Type",
-                    options = listOf(
-                        DropdownOption("csv", "CSV"),
-                        DropdownOption("xlsx", "Excel (.xlsx)"),
-                    ),
-                    selectedId = importType,
-                    onSelected = { importType = it },
-                )
-                Button(
-                    onClick = {
-                        val mimeTypes = if (importType == "xlsx") {
-                            arrayOf(
-                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                "application/vnd.ms-excel",
-                            )
-                        } else {
-                            arrayOf("text/csv", "text/comma-separated-values", "text/plain")
-                        }
-                        importPicker.launch(mimeTypes)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(if (selectedImportName.isBlank()) "Pick File" else "Change File")
-                }
-                if (selectedImportName.isNotBlank()) {
-                    Text("Selected: $selectedImportName", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                }
-                Button(
-                    onClick = {
-                        viewModel.importData(selectedImportUri, importType, "students")
-                        showImportSheet = false
-                    },
-                    enabled = selectedImportUri.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Start Import")
-                }
-            }
-        }
-    }
-
-    LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item {
-            ContextSelectorBar(
-                sections = state.sections,
-                cycles = state.cycles,
-                subjectsBySection = state.subjectsBySection,
-                assessmentsBySection = state.assessmentsBySection,
-                context = state.context,
-                showSubject = false,
-                showAssessment = false,
-                onGradeSelected = viewModel::selectContextGrade,
-                onSectionSelected = viewModel::selectContextSection,
-                onCycleSelected = viewModel::selectContextCycle,
-                onSubjectSelected = viewModel::selectContextSubject,
-                onAssessmentSelected = viewModel::selectContextAssessment,
-            )
-        }
-
-        item {
-            SectionHierarchyPanel(
-                selectedGrade = state.context.grade,
-                selectedSectionId = state.context.sectionId,
-                sections = state.sections,
-                studentCountBySection = state.studentsBySection.mapValues { it.value.size },
-                onSectionSelected = viewModel::selectContextSection,
-            )
-        }
-
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = { showAddSheet = true }, modifier = Modifier.weight(1f)) { Text("Add Student") }
-                Button(onClick = { showBatchSheet = true }, modifier = Modifier.weight(1f)) { Text("Batch Add") }
-                Button(onClick = { showImportSheet = true }, modifier = Modifier.weight(1f)) { Text("Import") }
-            }
-        }
-
-        item {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Search by roll/name") },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-            )
-        }
-
-        if (filtered.isEmpty()) {
-            item {
-                EmptyStateCard(
-                    title = "No students in current section",
-                    description = "Use Add/Batch/Import actions to populate roster.",
-                )
-            }
-        } else {
-            items(filtered) { student ->
-                GlassCard(Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { viewModel.openStudentProfile(student.studentId) },
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = {
+                            val roll = studentRoll.toIntOrNull() ?: 0
+                            if (selectedStudentId == "new") {
+                                viewModel.addStudent(
+                                    sectionId = studentSectionId,
+                                    fullName = studentName,
+                                    rollNumber = roll,
+                                )
+                            } else {
+                                viewModel.updateStudent(
+                                    studentId = selectedStudentId,
+                                    sectionId = studentSectionId,
+                                    fullName = studentName,
+                                    rollNumber = roll,
+                                )
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = studentSectionId.isNotBlank() && studentName.isNotBlank() && (studentRoll.toIntOrNull() ?: 0) > 0,
                     ) {
-                        Column {
-                            Text(
-                                "${student.rollNumber}. ${student.fullName}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                            )
-                            Text("Tap to open profile", style = MaterialTheme.typography.bodySmall, color = TextSecondary)
-                        }
-                        Text(
-                            text = if (student.active) "Active" else "Inactive",
-                            color = if (student.active) SuccessGreen else DangerRed,
-                            style = MaterialTheme.typography.labelMedium,
-                        )
+                        Text(if (selectedStudentId == "new") "Add" else "Edit")
+                    }
+                    Button(
+                        onClick = { viewModel.deleteStudent(selectedStudentId) },
+                        modifier = Modifier.weight(1f),
+                        enabled = selectedStudentId != "new",
+                    ) {
+                        Text("Delete")
                     }
                 }
             }
         }
 
+        GlassCard(Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Promote Students", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                FormDropdownField(
+                    label = "From Section",
+                    options = sectionOptions,
+                    selectedId = promoteFromSectionId.ifBlank { null },
+                    onSelected = { promoteFromSectionId = it },
+                    enabled = sectionOptions.isNotEmpty(),
+                )
+                FormDropdownField(
+                    label = "To Section",
+                    options = sectionOptions,
+                    selectedId = promoteToSectionId.ifBlank { null },
+                    onSelected = { promoteToSectionId = it },
+                    enabled = sectionOptions.isNotEmpty(),
+                )
+                Button(
+                    onClick = { viewModel.promoteStudents(promoteFromSectionId, promoteToSectionId) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = promoteFromSectionId.isNotBlank() && promoteToSectionId.isNotBlank() && promoteFromSectionId != promoteToSectionId,
+                ) {
+                    Text("Promote All Students")
+                }
+            }
+        }
+
+        HorizontalDivider()
         state.error?.let { message ->
-            item { Text(message, style = MaterialTheme.typography.bodySmall, color = DangerRed) }
+            Text(message, style = MaterialTheme.typography.bodySmall, color = DangerRed)
         }
         state.info?.let { message ->
-            item { Text(message, style = MaterialTheme.typography.bodySmall, color = SuccessGreen) }
+            Text(message, style = MaterialTheme.typography.bodySmall, color = SuccessGreen)
         }
     }
 }

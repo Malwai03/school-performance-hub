@@ -16,4 +16,7 @@ interface SubjectDao {
 
     @Query("SELECT * FROM subjects WHERE subjectId = :subjectId LIMIT 1")
     suspend fun getById(subjectId: String): SubjectEntity?
+
+    @Query("DELETE FROM subjects WHERE subjectId = :subjectId")
+    suspend fun deleteById(subjectId: String)
 }

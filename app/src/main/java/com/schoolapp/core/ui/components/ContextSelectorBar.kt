@@ -1,15 +1,16 @@
 package com.schoolapp.core.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,7 +29,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -36,8 +37,12 @@ import com.schoolapp.core.model.Assessment
 import com.schoolapp.core.model.AssessmentCycle
 import com.schoolapp.core.model.GradeSection
 import com.schoolapp.core.model.Subject
-import com.schoolapp.core.ui.theme.AccentCyan
+import com.schoolapp.core.ui.theme.BorderGray
 import com.schoolapp.core.ui.theme.PrimaryBlue
+import com.schoolapp.core.ui.theme.SurfaceBackground
+import com.schoolapp.core.ui.theme.SurfaceWhite
+import com.schoolapp.core.ui.theme.TextPrimary
+import com.schoolapp.core.ui.theme.TextSecondary
 
 @Composable
 fun ContextSelectorBar(
@@ -51,6 +56,7 @@ fun ContextSelectorBar(
     onCycleSelected: (String) -> Unit,
     onSubjectSelected: (String) -> Unit,
     onAssessmentSelected: (String) -> Unit,
+    showCycle: Boolean = true,
     showSubject: Boolean = true,
     showAssessment: Boolean = true,
     modifier: Modifier = Modifier,
@@ -61,77 +67,78 @@ fun ContextSelectorBar(
     val assessments = context.sectionId?.let { assessmentsBySection[it] }.orEmpty()
     val filteredAssessments = if (context.subjectId == null) assessments else assessments.filter { it.subjectId == context.subjectId }
 
-    LazyRow(
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(PrimaryBlue)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+            .background(SurfaceWhite),
     ) {
-        item {
-            Icon(
-                imageVector = Icons.Filled.FilterAlt,
-                contentDescription = "Filters",
-                tint = AccentCyan,
-                modifier = Modifier.size(16.dp),
-            )
-        }
-
-        item {
-            ContextPill(
-                shortLabel = "GR",
-                value = context.grade?.toString(),
-                options = grades.map { it.toString() to "Grade $it" },
-                onSelected = { selected -> selected.toIntOrNull()?.let(onGradeSelected) },
-            )
-        }
-
-        item { DividerIcon() }
-
-        item {
-            ContextPill(
-                shortLabel = "SEC",
-                value = sectionsForGrade.firstOrNull { it.sectionId == context.sectionId }?.sectionName,
-                options = sectionsForGrade.map { it.sectionId to it.sectionName },
-                onSelected = onSectionSelected,
-            )
-        }
-
-        item { DividerIcon() }
-
-        item {
-            ContextPill(
-                shortLabel = "CYC",
-                value = cycles.firstOrNull { it.cycleId == context.cycleId }?.name,
-                options = cycles.map { it.cycleId to it.name },
-                onSelected = onCycleSelected,
-            )
-        }
-
-        if (showSubject) {
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            item {
+                Icon(
+                    imageVector = Icons.Filled.FilterAlt,
+                    contentDescription = "Filters",
+                    tint = PrimaryBlue,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            item {
+                ContextPill(
+                    shortLabel = "GR",
+                    value = context.grade?.toString(),
+                    options = grades.map { it.toString() to "Grade $it" },
+                    onSelected = { selected -> selected.toIntOrNull()?.let(onGradeSelected) },
+                )
+            }
             item { DividerIcon() }
             item {
                 ContextPill(
-                    shortLabel = "SUB",
-                    value = subjects.firstOrNull { it.subjectId == context.subjectId }?.name,
-                    options = subjects.map { it.subjectId to it.name },
-                    onSelected = onSubjectSelected,
+                    shortLabel = "SEC",
+                    value = sectionsForGrade.firstOrNull { it.sectionId == context.sectionId }?.sectionName,
+                    options = sectionsForGrade.map { it.sectionId to it.sectionName },
+                    onSelected = onSectionSelected,
                 )
             }
-        }
-
-        if (showAssessment) {
-            item { DividerIcon() }
-            item {
-                ContextPill(
-                    shortLabel = "ASM",
-                    value = filteredAssessments.firstOrNull { it.assessmentId == context.assessmentId }?.title,
-                    options = filteredAssessments.map { it.assessmentId to it.title },
-                    onSelected = onAssessmentSelected,
-                )
+            if (showCycle) {
+                item { DividerIcon() }
+                item {
+                    ContextPill(
+                        shortLabel = "CYC",
+                        value = cycles.firstOrNull { it.cycleId == context.cycleId }?.name,
+                        options = cycles.map { it.cycleId to it.name },
+                        onSelected = onCycleSelected,
+                    )
+                }
+            }
+            if (showSubject) {
+                item { DividerIcon() }
+                item {
+                    ContextPill(
+                        shortLabel = "SUB",
+                        value = subjects.firstOrNull { it.subjectId == context.subjectId }?.name,
+                        options = subjects.map { it.subjectId to it.name },
+                        onSelected = onSubjectSelected,
+                    )
+                }
+            }
+            if (showAssessment) {
+                item { DividerIcon() }
+                item {
+                    ContextPill(
+                        shortLabel = "ASM",
+                        value = filteredAssessments.firstOrNull { it.assessmentId == context.assessmentId }?.title,
+                        options = filteredAssessments.map { it.assessmentId to it.title },
+                        onSelected = onAssessmentSelected,
+                    )
+                }
             }
         }
+        HorizontalDivider(color = BorderGray, thickness = 1.dp)
     }
 }
 
@@ -147,27 +154,28 @@ private fun ContextPill(
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color.White.copy(alpha = 0.12f))
+                .background(SurfaceBackground)
+                .border(1.dp, BorderGray, RoundedCornerShape(8.dp))
                 .clickable(enabled = options.isNotEmpty()) { expanded = true }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = shortLabel,
-                color = Color.White.copy(alpha = 0.72f),
+                color = TextSecondary,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
             )
             Text(
                 text = " ${value ?: "Select"}",
-                color = Color.White,
+                color = TextPrimary,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
             )
             Icon(
                 imageVector = Icons.Filled.ArrowDropDown,
                 contentDescription = null,
-                tint = Color.White.copy(alpha = 0.75f),
+                tint = TextSecondary,
                 modifier = Modifier.size(16.dp),
             )
         }
@@ -200,7 +208,7 @@ private fun DividerIcon() {
     Icon(
         imageVector = Icons.Filled.ChevronRight,
         contentDescription = null,
-        tint = Color.White.copy(alpha = 0.35f),
+        tint = BorderGray,
         modifier = Modifier.size(16.dp),
     )
 }

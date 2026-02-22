@@ -53,6 +53,8 @@ fun StudentProfileScreen(
     val student = state.profileStudent
     val latest = state.profileTrend.lastOrNull()
     val cycleOptions = state.profileCycles.map { DropdownOption(it.cycleId, it.name) }
+    val studentAverage = student?.studentId?.let { state.studentAverageById[it] }
+    val studentRank = student?.studentId?.let { state.studentRankById[it] ?: 0 } ?: 0
 
     if (state.profileLoading || student == null) {
         Column(
@@ -143,6 +145,14 @@ fun StudentProfileScreen(
                                 latest?.passStatus?.let { PassStatusBadge(it) }
                                 latest?.riskLevel?.let { RiskBadge(it) }
                                 StatRow("Section average", "${"%.1f".format(state.profileSectionAverage)}%")
+                                StatRow(
+                                    "Current cycle average",
+                                    studentAverage?.let { "${"%.1f".format(it)}%" } ?: "-",
+                                )
+                                StatRow(
+                                    "Leaderboard rank",
+                                    if (studentRank > 0) "#$studentRank" else "-",
+                                )
                             }
                             ProgressRing(percent = latest?.overallPercentage ?: 0.0, ringColor = ringColor)
                         }

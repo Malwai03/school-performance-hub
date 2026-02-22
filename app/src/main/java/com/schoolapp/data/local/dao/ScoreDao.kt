@@ -23,6 +23,12 @@ interface ScoreDao {
     @Query("SELECT * FROM scores WHERE synced = 0")
     suspend fun getUnsynced(): List<ScoreEntity>
 
+    @Query("DELETE FROM scores WHERE studentId = :studentId")
+    suspend fun deleteByStudent(studentId: String)
+
+    @Query("DELETE FROM scores WHERE assessmentId IN (:assessmentIds)")
+    suspend fun deleteByAssessmentIds(assessmentIds: List<String>)
+
     @Query("DELETE FROM scores WHERE assessmentId = :assessmentId AND studentId = :studentId AND scoreId != :keepScoreId")
     suspend fun deleteDuplicates(assessmentId: String, studentId: String, keepScoreId: String)
 

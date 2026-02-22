@@ -30,6 +30,37 @@ data class StudentAssessmentProfileRow(
     val subjectName: String,
 )
 
+data class LeaderboardRow(
+    val studentId: String,
+    val rollNumber: Int,
+    val fullName: String,
+    val averagePct: Double,
+    val rank: Int,
+    val hasScores: Boolean,
+)
+
+data class DashboardStudentRow(
+    val studentId: String,
+    val rollNumber: Int,
+    val studentName: String,
+    val examName: String,
+    val subjectName: String,
+    val marks: Double?,
+    val percentage: Double?,
+    val averagePct: Double?,
+    val rank: Int?,
+    val passStatus: String,
+    val subjectAveragesSummary: String,
+    val subjectMarks: List<DashboardSubjectMark>,
+)
+
+data class DashboardSubjectMark(
+    val subjectName: String,
+    val obtained: Double?,
+    val max: Double,
+    val percentage: Double?,
+)
+
 data class AdminDashboardState(
     val loading: Boolean = true,
     val selectedTab: Int = 0,
@@ -75,6 +106,14 @@ data class AdminDashboardState(
     val gradebookStatusByStudent: Map<String, ScoreStatus> = emptyMap(),
     val gradebookValidationByStudent: Map<String, String> = emptyMap(),
     val gradebookMaxMarks: Double? = null,
+    val sectionLeaderboard: List<LeaderboardRow> = emptyList(),
+    val studentAverageById: Map<String, Double> = emptyMap(),
+    val studentRankById: Map<String, Int> = emptyMap(),
+    val sectionAverageScorePct: Double = 0.0,
+    val sectionPassPct: Double = 0.0,
+    val sectionTopperStudentId: String? = null,
+    val dashboardRows: List<DashboardStudentRow> = emptyList(),
+    val dashboardSearchDone: Boolean = false,
     val gradebookSaving: Boolean = false,
     val publishReadinessMessage: String? = null,
     val publishReadinessError: Boolean = false,
@@ -114,6 +153,7 @@ class AdminViewModel(
             error = null,
             info = null,
         )
+        refresh()
     }
 
     fun selectTab(tab: Int) {
@@ -128,6 +168,8 @@ class AdminViewModel(
                 subjectId = null,
                 assessmentId = null,
             ),
+            dashboardRows = emptyList(),
+            dashboardSearchDone = false,
             error = null,
             info = null,
         )
@@ -141,6 +183,8 @@ class AdminViewModel(
                 subjectId = null,
                 assessmentId = null,
             ),
+            dashboardRows = emptyList(),
+            dashboardSearchDone = false,
             error = null,
             info = null,
         )
@@ -154,6 +198,8 @@ class AdminViewModel(
                 assessmentId = null,
             ),
             selectedCycleId = cycleId,
+            dashboardRows = emptyList(),
+            dashboardSearchDone = false,
             error = null,
             info = null,
         )
@@ -166,6 +212,8 @@ class AdminViewModel(
                 subjectId = subjectId,
                 assessmentId = null,
             ),
+            dashboardRows = emptyList(),
+            dashboardSearchDone = false,
             error = null,
             info = null,
         )
@@ -175,6 +223,8 @@ class AdminViewModel(
     fun selectContextAssessment(assessmentId: String) {
         _uiState.value = _uiState.value.copy(
             context = _uiState.value.context.copy(assessmentId = assessmentId),
+            dashboardRows = emptyList(),
+            dashboardSearchDone = false,
             error = null,
             info = null,
         )
@@ -230,6 +280,7 @@ class AdminViewModel(
                     assessmentsBySection = assessmentsBySection,
                     context = contextSeed,
                 )
+                val contextChanged = context != previous.context
 
                 val gradebookStudents = context.sectionId
                     ?.let { studentsBySection[it] }
@@ -254,6 +305,69 @@ class AdminViewModel(
                 val gradebookStatus = gradebookStudents.associate { student ->
                     student.studentId to (gradebookScores[student.studentId]?.status ?: ScoreStatus.PRESENT)
                 }
+                val cycleAssessments = context.sectionId
+                    ?.let { sectionId -> assessmentsBySection[sectionId].orEmpty() }
+                    .orEmpty()
+                val scoresByAssessmentId = cycleAssessments.associate { assessment ->
+                    assessment.assessmentId to marksRepository.getScoresByAssessment(assessment.assessmentId).associateBy { it.studentId }
+                }
+                data class LeaderSeed(
+                    val student: Student,
+                    val averagePct: Double,
+                    val hasScores: Boolean,
+                )
+                val rankedSeeds = gradebookStudents.map { student ->
+                    var totalObtained = 0.0
+                    var totalMax = 0.0
+                    cycleAssessments.forEach { assessment ->
+                        val score = scoresByAssessmentId[assessment.assessmentId]?.get(student.studentId)
+                        if (score != null) {
+                            totalMax += assessment.maxMarks
+                            totalObtained += when (score.status) {
+                                ScoreStatus.PRESENT -> score.obtainedMarks
+                                ScoreStatus.ABSENT, ScoreStatus.EXEMPT -> 0.0
+                            }
+                        }
+                    }
+                    val hasScores = totalMax > 0.0
+                    LeaderSeed(
+                        student = student,
+                        averagePct = if (hasScores) (totalObtained / totalMax) * 100.0 else 0.0,
+                        hasScores = hasScores,
+                    )
+                }.sortedWith(
+                    compareByDescending<LeaderSeed> { it.hasScores }
+                        .thenByDescending { it.averagePct }
+                        .thenBy { it.student.rollNumber },
+                )
+
+                var rankCursor = 0
+                val leaderboard = rankedSeeds.map { seed ->
+                    val rank = if (seed.hasScores) {
+                        rankCursor += 1
+                        rankCursor
+                    } else {
+                        0
+                    }
+                    LeaderboardRow(
+                        studentId = seed.student.studentId,
+                        rollNumber = seed.student.rollNumber,
+                        fullName = seed.student.fullName,
+                        averagePct = seed.averagePct,
+                        rank = rank,
+                        hasScores = seed.hasScores,
+                    )
+                }
+                val scoredRows = leaderboard.filter { it.hasScores }
+                val sectionAverageScorePct = scoredRows.map { it.averagePct }.average().takeIf { !it.isNaN() } ?: 0.0
+                val sectionPassPct = if (scoredRows.isEmpty()) {
+                    0.0
+                } else {
+                    (scoredRows.count { it.averagePct >= 33.0 }.toDouble() / scoredRows.size) * 100.0
+                }
+                val sectionTopperId = scoredRows.firstOrNull()?.studentId
+                val averageById = leaderboard.associate { it.studentId to it.averagePct }
+                val rankById = leaderboard.associate { it.studentId to it.rank }
 
                 AdminDashboardState(
                     loading = false,
@@ -294,6 +408,14 @@ class AdminViewModel(
                     gradebookStatusByStudent = gradebookStatus,
                     gradebookValidationByStudent = previous.gradebookValidationByStudent,
                     gradebookMaxMarks = selectedAssessment?.maxMarks,
+                    sectionLeaderboard = leaderboard,
+                    studentAverageById = averageById,
+                    studentRankById = rankById,
+                    sectionAverageScorePct = sectionAverageScorePct,
+                    sectionPassPct = sectionPassPct,
+                    sectionTopperStudentId = sectionTopperId,
+                    dashboardRows = if (contextChanged) emptyList() else previous.dashboardRows,
+                    dashboardSearchDone = if (contextChanged) false else previous.dashboardSearchDone,
                     gradebookSaving = false,
                     publishReadinessMessage = previous.publishReadinessMessage,
                     publishReadinessError = previous.publishReadinessError,
@@ -347,10 +469,148 @@ class AdminViewModel(
         selectContextCycle(cycleId)
     }
 
+    fun runDashboardSearch() {
+        val state = _uiState.value
+        val sectionId = state.context.sectionId
+        val assessmentId = state.context.assessmentId
+        if (sectionId == null || assessmentId == null) {
+            _uiState.value = state.copy(error = "Select class, section, and exam first", dashboardSearchDone = false)
+            return
+        }
+        viewModelScope.launch {
+            runCatching {
+                val cycleId = state.context.cycleId ?: state.selectedCycleId ?: error("Select cycle first")
+                val students = masterDataRepository.getStudentsBySection(sectionId).sortedBy { it.rollNumber }
+                val assessments = masterDataRepository.getAssessments(sectionId, cycleId)
+                val assessment = assessments.firstOrNull { it.assessmentId == assessmentId } ?: error("Exam not found")
+                val subjectMap = masterDataRepository.getSubjectsBySection(sectionId)
+                    .associate { it.subjectId to it }
+                val mandatorySubjectIds = subjectMap.values.filter { it.mandatory }.map { it.subjectId }.toSet()
+                val scoreMapByAssessment = assessments.associate { exam ->
+                    exam.assessmentId to marksRepository.getScoresByAssessment(exam.assessmentId).associateBy { it.studentId }
+                }
+                val selectedScoreMap = scoreMapByAssessment[assessmentId].orEmpty()
+                val groupedBySubject = assessments.groupBy { it.subjectId }
+                data class RowSeed(
+                    val row: DashboardStudentRow,
+                    val rankMetric: Double?,
+                )
+                val seededRows = students.map { student ->
+                    val score = selectedScoreMap[student.studentId]
+                    val marks = score?.let {
+                        when (it.status) {
+                            ScoreStatus.PRESENT -> it.obtainedMarks
+                            ScoreStatus.ABSENT, ScoreStatus.EXEMPT -> 0.0
+                        }
+                    }
+                    val mandatoryAssessments = assessments.filter { it.subjectId in mandatorySubjectIds }
+                    val overallMax = mandatoryAssessments.sumOf { it.maxMarks }
+                    val totalObtained = mandatoryAssessments.sumOf { exam ->
+                        val examScore = scoreMapByAssessment[exam.assessmentId]?.get(student.studentId) ?: return@sumOf 0.0
+                        when (examScore.status) {
+                            ScoreStatus.PRESENT -> examScore.obtainedMarks
+                            ScoreStatus.ABSENT, ScoreStatus.EXEMPT -> 0.0
+                        }
+                    }
+                    val overallAverage = if (overallMax > 0.0) (totalObtained / overallMax) * 100.0 else null
+                    val subjectMarks = groupedBySubject.entries
+                        .sortedBy { subjectMap[it.key]?.name ?: it.key }
+                        .map { (subjectId, exams) ->
+                            val subjectName = subjectMap[subjectId]?.name ?: subjectId
+                            val totalSubjectMax = exams.sumOf { it.maxMarks }
+                            val hasAnyEntry = exams.any { scoreMapByAssessment[it.assessmentId]?.containsKey(student.studentId) == true }
+                            val obtained = exams.sumOf { exam ->
+                                val examScore = scoreMapByAssessment[exam.assessmentId]?.get(student.studentId) ?: return@sumOf 0.0
+                                when (examScore.status) {
+                                    ScoreStatus.PRESENT -> examScore.obtainedMarks
+                                    ScoreStatus.ABSENT, ScoreStatus.EXEMPT -> 0.0
+                                }
+                            }
+                            DashboardSubjectMark(
+                                subjectName = subjectName,
+                                obtained = if (hasAnyEntry) obtained else null,
+                                max = totalSubjectMax,
+                                percentage = if (hasAnyEntry && totalSubjectMax > 0.0) (obtained / totalSubjectMax) * 100.0 else null,
+                            )
+                        }
+                    val subjectAverages = groupedBySubject.mapValues { (_, exams) ->
+                        val percentages = exams.mapNotNull { exam ->
+                            val examScore = scoreMapByAssessment[exam.assessmentId]?.get(student.studentId) ?: return@mapNotNull null
+                            val obtained = when (examScore.status) {
+                                ScoreStatus.PRESENT -> examScore.obtainedMarks
+                                ScoreStatus.ABSENT, ScoreStatus.EXEMPT -> 0.0
+                            }
+                            (obtained / exam.maxMarks) * 100.0
+                        }
+                        if (percentages.isEmpty()) null else percentages.average()
+                    }
+                    val hasAnySubjectScore = subjectAverages.values.any { it != null }
+                    val passStatus = when {
+                        !hasAnySubjectScore -> "INCOMPLETE"
+                        mandatorySubjectIds.any { subjectId ->
+                            val avg = subjectAverages[subjectId] ?: return@any false
+                            val threshold = subjectMap[subjectId]?.passThresholdPct ?: 33.0
+                            avg < threshold
+                        } -> "FAIL"
+                        else -> "PASS"
+                    }
+                    val subjectSummary = groupedBySubject.entries.joinToString(" | ") { (subjectId, _) ->
+                        val name = subjectMap[subjectId]?.name ?: subjectId
+                        val avg = subjectAverages[subjectId]
+                        "$name ${avg?.let { "${"%.1f".format(it)}%" } ?: "-"}"
+                    }
+                    RowSeed(
+                        row = DashboardStudentRow(
+                            studentId = student.studentId,
+                            rollNumber = student.rollNumber,
+                            studentName = student.fullName,
+                            examName = assessment.title,
+                            subjectName = subjectMap[assessment.subjectId]?.name ?: "Subject",
+                            marks = marks,
+                            percentage = marks?.let { (it / assessment.maxMarks) * 100.0 },
+                            averagePct = overallAverage,
+                            rank = null,
+                            passStatus = passStatus,
+                            subjectAveragesSummary = subjectSummary,
+                            subjectMarks = subjectMarks,
+                        ),
+                        rankMetric = overallAverage,
+                    )
+                }
+                val ranked = seededRows.sortedWith(
+                    compareByDescending<RowSeed> { it.rankMetric != null }
+                        .thenByDescending { it.rankMetric ?: 0.0 }
+                        .thenBy { it.row.rollNumber },
+                )
+                var rankCursor = 0
+                ranked.map { seed ->
+                    val rank = if (seed.rankMetric != null) {
+                        rankCursor += 1
+                        rankCursor
+                    } else {
+                        null
+                    }
+                    seed.row.copy(rank = rank)
+                }
+            }.onSuccess { rows ->
+                _uiState.value = _uiState.value.copy(
+                    dashboardRows = rows,
+                    dashboardSearchDone = true,
+                    error = null,
+                    info = null,
+                )
+            }.onFailure { error ->
+                _uiState.value = _uiState.value.copy(
+                    dashboardRows = emptyList(),
+                    dashboardSearchDone = false,
+                    error = error.message,
+                )
+            }
+        }
+    }
+
     fun openStudentProfile(studentId: String) {
         _uiState.value = _uiState.value.copy(
-            destination = AdminDestination.ROSTER,
-            selectedTab = destinationToTab(AdminDestination.ROSTER),
             selectedStudentProfileId = studentId,
             profileLoading = true,
             profileSelectedTab = StudentProfileTab.OVERVIEW,
@@ -588,6 +848,7 @@ class AdminViewModel(
             runCatching {
                 marksRepository.upsertScoresBulk(BulkScorePatch(assessmentId = assessment, rows = rows))
             }.onSuccess {
+                val refreshDashboard = _uiState.value.dashboardSearchDone
                 _uiState.value = _uiState.value.copy(
                     gradebookSaving = false,
                     gradebookValidationByStudent = emptyMap(),
@@ -595,6 +856,9 @@ class AdminViewModel(
                     error = null,
                 )
                 refresh()
+                if (refreshDashboard) {
+                    runDashboardSearch()
+                }
             }.onFailure { error ->
                 _uiState.value = _uiState.value.copy(
                     gradebookSaving = false,
@@ -755,6 +1019,65 @@ class AdminViewModel(
         }
     }
 
+    fun updateStudent(studentId: String, sectionId: String, fullName: String, rollNumber: Int) {
+        viewModelScope.launch {
+            runCatching {
+                require(studentId.isNotBlank()) { "Student is required" }
+                require(sectionId.isNotBlank()) { "Section is required" }
+                require(fullName.isNotBlank()) { "Student name is required" }
+                require(rollNumber > 0) { "Roll number must be greater than 0" }
+
+                val existing = _uiState.value.studentsBySection.values.flatten()
+                    .firstOrNull { it.studentId == studentId }
+                    ?: error("Student not found")
+                val section = _uiState.value.sections.firstOrNull { it.sectionId == sectionId } ?: error("Section not found")
+                val duplicateRoll = masterDataRepository.getStudentsBySection(sectionId).any {
+                    it.rollNumber == rollNumber && it.studentId != studentId
+                }
+                require(!duplicateRoll) { "Roll number $rollNumber already exists in this section" }
+
+                masterDataRepository.upsertStudent(
+                    existing.copy(
+                        schoolId = section.schoolId,
+                        sectionId = sectionId,
+                        fullName = fullName.trim(),
+                        rollNumber = rollNumber,
+                    ),
+                )
+            }.onSuccess {
+                _uiState.value = _uiState.value.copy(info = "Student updated", error = null)
+                refresh()
+                if (_uiState.value.selectedStudentProfileId == studentId) {
+                    loadStudentProfile(studentId, _uiState.value.profileSelectedCycleId)
+                }
+            }.onFailure { _uiState.value = _uiState.value.copy(error = it.message) }
+        }
+    }
+
+    fun deleteStudent(studentId: String) {
+        viewModelScope.launch {
+            runCatching {
+                require(studentId.isNotBlank()) { "Student is required" }
+                masterDataRepository.deleteStudent(studentId)
+            }.onSuccess {
+                val shouldCloseProfile = _uiState.value.selectedStudentProfileId == studentId
+                _uiState.value = if (shouldCloseProfile) {
+                    _uiState.value.copy(
+                        selectedStudentProfileId = null,
+                        profileStudent = null,
+                        profileAssessments = emptyList(),
+                        profileTrend = emptyList(),
+                        info = "Student deleted",
+                        error = null,
+                    )
+                } else {
+                    _uiState.value.copy(info = "Student deleted", error = null)
+                }
+                refresh()
+            }.onFailure { _uiState.value = _uiState.value.copy(error = it.message) }
+        }
+    }
+
     fun showCreateCycleDialog() { _uiState.value = _uiState.value.copy(showCreateCycleDialog = true) }
     fun dismissCreateCycleDialog() { _uiState.value = _uiState.value.copy(showCreateCycleDialog = false) }
 
@@ -816,6 +1139,59 @@ class AdminViewModel(
         }
     }
 
+    fun updateSection(sectionId: String, grade: Int, sectionName: String) {
+        viewModelScope.launch {
+            runCatching {
+                require(sectionId.isNotBlank()) { "Section is required" }
+                require(grade in 1..10) { "Grade must be between 1 and 10" }
+                require(sectionName.isNotBlank()) { "Section name is required" }
+
+                val existing = _uiState.value.sections.firstOrNull { it.sectionId == sectionId } ?: error("Section not found")
+                val normalized = sectionName.trim().uppercase()
+                val duplicate = _uiState.value.sections.any {
+                    it.sectionId != sectionId &&
+                        it.grade == grade &&
+                        it.sectionName.equals(normalized, ignoreCase = true)
+                }
+                require(!duplicate) { "Same grade and section already exists" }
+
+                masterDataRepository.upsertSection(
+                    existing.copy(
+                        grade = grade,
+                        sectionName = normalized,
+                    ),
+                )
+            }.onSuccess {
+                _uiState.value = _uiState.value.copy(info = "Section updated", error = null)
+                refresh()
+            }.onFailure { _uiState.value = _uiState.value.copy(error = it.message) }
+        }
+    }
+
+    fun deleteSection(sectionId: String) {
+        viewModelScope.launch {
+            runCatching {
+                require(sectionId.isNotBlank()) { "Section is required" }
+                masterDataRepository.deleteSection(sectionId)
+            }.onSuccess {
+                _uiState.value = _uiState.value.copy(
+                    context = if (_uiState.value.context.sectionId == sectionId) {
+                        _uiState.value.context.copy(sectionId = null, subjectId = null, assessmentId = null)
+                    } else {
+                        _uiState.value.context
+                    },
+                    selectedStudentProfileId = null,
+                    profileStudent = null,
+                    profileAssessments = emptyList(),
+                    profileTrend = emptyList(),
+                    info = "Section deleted",
+                    error = null,
+                )
+                refresh()
+            }.onFailure { _uiState.value = _uiState.value.copy(error = it.message) }
+        }
+    }
+
     fun showCreateSubjectDialog() { _uiState.value = _uiState.value.copy(showCreateSubjectDialog = true) }
     fun dismissCreateSubjectDialog() { _uiState.value = _uiState.value.copy(showCreateSubjectDialog = false) }
 
@@ -845,6 +1221,84 @@ class AdminViewModel(
                 )
             }.onSuccess {
                 _uiState.value = _uiState.value.copy(showCreateSubjectDialog = false, info = "Subject created")
+                refresh()
+            }.onFailure { _uiState.value = _uiState.value.copy(error = it.message) }
+        }
+    }
+
+    fun updateSubject(subjectId: String, sectionId: String, subjectName: String, passThreshold: Double, mandatory: Boolean) {
+        viewModelScope.launch {
+            runCatching {
+                require(subjectId.isNotBlank()) { "Subject is required" }
+                require(sectionId.isNotBlank()) { "Section is required" }
+                require(subjectName.isNotBlank()) { "Subject name is required" }
+
+                val section = _uiState.value.sections.firstOrNull { it.sectionId == sectionId } ?: error("Section not found")
+                val current = _uiState.value.subjectsBySection[sectionId].orEmpty()
+                    .firstOrNull { it.subjectId == subjectId }
+                    ?: error("Subject not found")
+                masterDataRepository.upsertSubject(
+                    current.copy(
+                        schoolId = section.schoolId,
+                        grade = section.grade,
+                        name = subjectName.trim(),
+                        passThresholdPct = passThreshold.coerceIn(0.0, 100.0),
+                        mandatory = mandatory,
+                    ),
+                )
+            }.onSuccess {
+                _uiState.value = _uiState.value.copy(info = "Subject updated", error = null)
+                refresh()
+            }.onFailure { _uiState.value = _uiState.value.copy(error = it.message) }
+        }
+    }
+
+    fun deleteSubject(subjectId: String) {
+        viewModelScope.launch {
+            runCatching {
+                require(subjectId.isNotBlank()) { "Subject is required" }
+                masterDataRepository.deleteSubject(subjectId)
+            }.onSuccess {
+                val context = _uiState.value.context
+                _uiState.value = _uiState.value.copy(
+                    context = if (context.subjectId == subjectId) {
+                        context.copy(subjectId = null, assessmentId = null)
+                    } else {
+                        context
+                    },
+                    info = "Subject deleted",
+                    error = null,
+                )
+                refresh()
+            }.onFailure { _uiState.value = _uiState.value.copy(error = it.message) }
+        }
+    }
+
+    fun promoteStudents(sourceSectionId: String, targetSectionId: String) {
+        viewModelScope.launch {
+            runCatching {
+                require(sourceSectionId.isNotBlank()) { "Source section is required" }
+                require(targetSectionId.isNotBlank()) { "Target section is required" }
+                require(sourceSectionId != targetSectionId) { "Source and target section must be different" }
+                val sourceStudents = masterDataRepository.getStudentsBySection(sourceSectionId).sortedBy { it.rollNumber }
+                require(sourceStudents.isNotEmpty()) { "No students available in source section" }
+                val targetStudents = masterDataRepository.getStudentsBySection(targetSectionId)
+                val nextRollStart = (targetStudents.maxOfOrNull { it.rollNumber } ?: 0) + 1
+
+                sourceStudents.forEachIndexed { index, student ->
+                    masterDataRepository.upsertStudent(
+                        student.copy(
+                            sectionId = targetSectionId,
+                            rollNumber = nextRollStart + index,
+                        ),
+                    )
+                }
+                sourceStudents.size
+            }.onSuccess { count ->
+                _uiState.value = _uiState.value.copy(
+                    info = "$count students promoted",
+                    error = null,
+                )
                 refresh()
             }.onFailure { _uiState.value = _uiState.value.copy(error = it.message) }
         }
@@ -888,6 +1342,48 @@ class AdminViewModel(
                 )
             }.onSuccess {
                 _uiState.value = _uiState.value.copy(showCreateAssessmentDialog = false, info = "Assessment created")
+                refresh()
+            }.onFailure { _uiState.value = _uiState.value.copy(error = it.message) }
+        }
+    }
+
+    fun createExamForm(title: String, subjectId: String, maxMarks: Double, weight: Double) {
+        val state = _uiState.value
+        val sectionId = state.context.sectionId
+        val cycleId = state.context.cycleId
+        if (sectionId == null || cycleId == null) {
+            _uiState.value = state.copy(error = "Select class section and cycle first")
+            return
+        }
+        viewModelScope.launch {
+            runCatching {
+                require(subjectId.isNotBlank()) { "Subject is required" }
+                require(title.isNotBlank()) { "Exam name is required" }
+                require(maxMarks > 0) { "Maximum marks must be greater than 0" }
+                require(weight > 0) { "Weight must be greater than 0" }
+                val existing = masterDataRepository.getAssessments(sectionId, cycleId)
+                val duplicate = existing.any { it.subjectId == subjectId && it.title.equals(title.trim(), ignoreCase = true) }
+                require(!duplicate) { "Exam name already exists for this subject" }
+
+                val assessmentId = "assess_${sectionId}_${subjectId}_${System.currentTimeMillis()}"
+                masterDataRepository.upsertAssessment(
+                    Assessment(
+                        assessmentId = assessmentId,
+                        cycleId = cycleId,
+                        sectionId = sectionId,
+                        subjectId = subjectId,
+                        title = title.trim(),
+                        maxMarks = maxMarks,
+                        weight = weight,
+                    ),
+                )
+                assessmentId
+            }.onSuccess { assessmentId ->
+                _uiState.value = _uiState.value.copy(
+                    context = _uiState.value.context.copy(subjectId = subjectId, assessmentId = assessmentId),
+                    info = "Exam form created. Fill scores below.",
+                    error = null,
+                )
                 refresh()
             }.onFailure { _uiState.value = _uiState.value.copy(error = it.message) }
         }

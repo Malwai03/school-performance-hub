@@ -241,6 +241,62 @@ private class MasterDataRepositoryImpl(
         }
     }
 
+    override suspend fun deleteSection(sectionId: String) {
+        withContext(Dispatchers.IO) {
+            val section = db.sectionDao().getAll().firstOrNull { it.sectionId == sectionId } ?: return@withContext
+            val assessments = db.assessmentDao().getBySection(sectionId)
+            val assessmentIds = assessments.map { it.assessmentId }
+            val students = db.studentDao().getBySectionAll(sectionId)
+
+            if (assessmentIds.isNotEmpty()) {
+                db.scoreDao().deleteByAssessmentIds(assessmentIds)
+            }
+            students.forEach { student ->
+                db.scoreDao().deleteByStudent(student.studentId)
+                db.resultSnapshotDao().deleteByStudent(student.studentId)
+                db.studentDao().deleteById(student.studentId)
+                deleteDoc("students", student.studentId)
+            }
+
+            db.resultSnapshotDao().deleteBySection(sectionId)
+            db.assessmentDao().deleteBySection(sectionId)
+            db.teacherAssignmentDao().deleteBySection(sectionId)
+            db.sectionDao().deleteById(sectionId)
+
+            assessments.forEach { assessment ->
+                deleteDoc("assessments", assessment.assessmentId)
+            }
+            deleteDoc("sections", section.sectionId)
+        }
+    }
+
+    override suspend fun deleteStudent(studentId: String) {
+        withContext(Dispatchers.IO) {
+            val student = db.studentDao().getById(studentId) ?: return@withContext
+            db.scoreDao().deleteByStudent(studentId)
+            db.resultSnapshotDao().deleteByStudent(studentId)
+            db.studentDao().deleteById(studentId)
+            deleteDoc("students", student.studentId)
+        }
+    }
+
+    override suspend fun deleteSubject(subjectId: String) {
+        withContext(Dispatchers.IO) {
+            val subject = db.subjectDao().getById(subjectId) ?: return@withContext
+            val assessments = db.assessmentDao().getBySubject(subjectId)
+            val assessmentIds = assessments.map { it.assessmentId }
+            if (assessmentIds.isNotEmpty()) {
+                db.scoreDao().deleteByAssessmentIds(assessmentIds)
+            }
+            db.assessmentDao().deleteBySubject(subjectId)
+            db.teacherAssignmentDao().deleteBySubject(subjectId)
+            db.subjectDao().deleteById(subjectId)
+
+            assessments.forEach { assessment -> deleteDoc("assessments", assessment.assessmentId) }
+            deleteDoc("subjects", subject.subjectId)
+        }
+    }
+
     override suspend fun upsertAssessmentCycle(cycle: AssessmentCycle) {
         withContext(Dispatchers.IO) {
             db.assessmentCycleDao().upsert(cycle.toEntity())
@@ -331,6 +387,19 @@ private class MasterDataRepositoryImpl(
                 .collection(collection)
                 .document(id)
                 .set(payload)
+                .await()
+        }
+    }
+
+    private suspend fun deleteDoc(collection: String, id: String) {
+        runCatching {
+            val remote = firestore ?: return@runCatching
+            val schoolId = currentSchoolId()
+            remote.collection("schools")
+                .document(schoolId)
+                .collection(collection)
+                .document(id)
+                .delete()
                 .await()
         }
     }

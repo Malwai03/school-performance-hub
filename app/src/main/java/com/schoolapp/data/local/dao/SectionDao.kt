@@ -13,4 +13,7 @@ interface SectionDao {
 
     @Query("SELECT * FROM sections ORDER BY grade ASC, sectionName ASC")
     suspend fun getAll(): List<SectionEntity>
+
+    @Query("DELETE FROM sections WHERE sectionId = :sectionId")
+    suspend fun deleteById(sectionId: String)
 }

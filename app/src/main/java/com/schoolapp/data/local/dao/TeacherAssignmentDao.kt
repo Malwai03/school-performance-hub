@@ -16,4 +16,10 @@ interface TeacherAssignmentDao {
 
     @Query("SELECT * FROM teacher_assignments WHERE sectionId = :sectionId AND subjectId = :subjectId LIMIT 1")
     suspend fun getAssignment(sectionId: String, subjectId: String): TeacherAssignmentEntity?
+
+    @Query("DELETE FROM teacher_assignments WHERE sectionId = :sectionId")
+    suspend fun deleteBySection(sectionId: String)
+
+    @Query("DELETE FROM teacher_assignments WHERE subjectId = :subjectId")
+    suspend fun deleteBySubject(subjectId: String)
 }

@@ -14,8 +14,14 @@ interface StudentDao {
     @Query("SELECT * FROM students WHERE sectionId = :sectionId AND active = 1 ORDER BY rollNumber")
     suspend fun getBySection(sectionId: String): List<StudentEntity>
 
+    @Query("SELECT * FROM students WHERE sectionId = :sectionId ORDER BY rollNumber")
+    suspend fun getBySectionAll(sectionId: String): List<StudentEntity>
+
     @Query("SELECT * FROM students WHERE studentId = :studentId LIMIT 1")
     suspend fun getById(studentId: String): StudentEntity?
+
+    @Query("DELETE FROM students WHERE studentId = :studentId")
+    suspend fun deleteById(studentId: String)
 
     @Query("SELECT COUNT(*) FROM students")
     suspend fun countAll(): Int
