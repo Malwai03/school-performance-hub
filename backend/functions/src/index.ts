@@ -2,6 +2,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentUpdated, onDocumentWritten } from "firebase-functions/v2/firestore";
 import * as logger from "firebase-functions/logger";
 import { getApps, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { getMessaging } from "firebase-admin/messaging";
@@ -14,6 +15,7 @@ if (!getApps().length) {
 
 const db = getFirestore();
 const storage = getStorage();
+const adminAuth = getAuth();
 
 const REGION = "us-central1";
 const SUBJECT_DEFAULT_THRESHOLD = 33;
@@ -65,6 +67,19 @@ function requireAdmin(auth: { token?: Record<string, unknown> } | null | undefin
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function hiddenEmailFromCode(loginCode: string): string {
+  return `${loginCode.trim().toLowerCase()}@schoolapp.local`;
+}
+
+function generateTemporaryPassword(length = 10): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  let output = "";
+  for (let i = 0; i < length; i++) {
+    output += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return `${output}!`;
 }
 
 function computeSubjectPercentage(assessments: AssessmentDoc[], scoreByAssessment: Map<string, ScoreDoc>): { percentage: number; complete: boolean } {
@@ -200,6 +215,139 @@ async function parseImportedRows(fileRef: string, type: "csv" | "xlsx"): Promise
   const worksheet = workbook.Sheets[firstSheetName];
   return XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: "" });
 }
+
+export const createManagedUserAccount = onCall({ region: REGION }, async (request) => {
+  requireAdmin(request.auth);
+  const schoolId = String(request.data?.schoolId || "").trim() || "school_001";
+  const role = String(request.data?.role || "").trim().toUpperCase();
+  const loginCode = String(request.data?.loginCode || "").trim().toLowerCase();
+  const displayName = String(request.data?.displayName || "").trim();
+  const studentIdRaw = String(request.data?.studentId || "").trim();
+  const sectionId = String(request.data?.sectionId || "").trim();
+
+  if (!loginCode || /\s/.test(loginCode)) {
+    throw new HttpsError("invalid-argument", "Valid login code is required");
+  }
+  if (!displayName) {
+    throw new HttpsError("invalid-argument", "Display name is required");
+  }
+  if (role !== "STUDENT" && role !== "TEACHER") {
+    throw new HttpsError("invalid-argument", "Role must be STUDENT or TEACHER");
+  }
+  if (role === "STUDENT" && !studentIdRaw) {
+    throw new HttpsError("invalid-argument", "studentId is required for student accounts");
+  }
+
+  const email = hiddenEmailFromCode(loginCode);
+  const temporaryPassword = generateTemporaryPassword();
+  const userUid = role === "STUDENT" ? studentIdRaw : undefined;
+
+  const schoolRef = db.collection("schools").doc(schoolId);
+  const usersRef = schoolRef.collection("users");
+  const existingByCode = await usersRef.where("code", "==", loginCode).limit(1).get();
+  if (!existingByCode.empty) {
+    throw new HttpsError("already-exists", "Login code already exists");
+  }
+
+  let authUserUid: string;
+  try {
+    const created = await adminAuth.createUser({
+      uid: userUid,
+      email,
+      password: temporaryPassword,
+      displayName,
+      disabled: false,
+    });
+    authUserUid = created.uid;
+  } catch (error: any) {
+    logger.error("createManagedUserAccount createUser failed", error);
+    const code = String(error?.code || "");
+    if (code.includes("email-already-exists") || code.includes("uid-already-exists")) {
+      throw new HttpsError("already-exists", "Account already exists for this login code or student");
+    }
+    throw new HttpsError("internal", "Unable to create auth account");
+  }
+
+  await adminAuth.setCustomUserClaims(authUserUid, {
+    role,
+    schoolId,
+  });
+
+  await usersRef.doc(authUserUid).set(
+    {
+      uid: authUserUid,
+      schoolId,
+      role,
+      displayName,
+      code: loginCode,
+      active: true,
+      mustChangePassword: true,
+      linkedStudentId: role === "STUDENT" ? studentIdRaw : null,
+      sectionId: sectionId || null,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  if (role === "STUDENT") {
+    await schoolRef.collection("students").doc(studentIdRaw).set(
+      {
+        authUid: authUserUid,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+  }
+
+  return {
+    loginCode,
+    temporaryPassword,
+    role,
+    uid: authUserUid,
+  };
+});
+
+export const resetManagedUserPassword = onCall({ region: REGION }, async (request) => {
+  requireAdmin(request.auth);
+  const schoolId = String(request.data?.schoolId || "").trim() || "school_001";
+  const loginCode = String(request.data?.loginCode || "").trim().toLowerCase();
+  if (!loginCode || /\s/.test(loginCode)) {
+    throw new HttpsError("invalid-argument", "Valid login code is required");
+  }
+
+  const schoolRef = db.collection("schools").doc(schoolId);
+  const userSnap = await schoolRef.collection("users").where("code", "==", loginCode).limit(1).get();
+  if (userSnap.empty) {
+    throw new HttpsError("not-found", "User not found for login code");
+  }
+  const doc = userSnap.docs[0];
+  const data = doc.data();
+  const role = String(data.role || "STUDENT").toUpperCase();
+
+  const temporaryPassword = generateTemporaryPassword();
+  try {
+    await adminAuth.updateUser(doc.id, { password: temporaryPassword });
+  } catch (error) {
+    logger.error("resetManagedUserPassword updateUser failed", error);
+    throw new HttpsError("internal", "Unable to reset password");
+  }
+
+  await doc.ref.set(
+    {
+      mustChangePassword: true,
+      updatedAt: FieldValue.serverTimestamp(),
+      passwordResetAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  return {
+    loginCode,
+    temporaryPassword,
+    role,
+  };
+});
 
 function normalizeEntityRow(entityType: string, row: Record<string, unknown>): { id: string; payload: Record<string, unknown> } {
   if (entityType === "students") {

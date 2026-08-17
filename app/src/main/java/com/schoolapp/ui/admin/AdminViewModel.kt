@@ -9,6 +9,7 @@ import com.schoolapp.core.model.Assessment
 import com.schoolapp.core.model.AssessmentCycle
 import com.schoolapp.core.model.BulkScorePatch
 import com.schoolapp.core.model.GradeSection
+import com.schoolapp.core.model.ManagedCredentialResult
 import com.schoolapp.core.model.ResultSnapshot
 import com.schoolapp.core.model.ScoreEntry
 import com.schoolapp.core.model.ScoreStatus
@@ -16,7 +17,9 @@ import com.schoolapp.core.model.SectionSummary
 import com.schoolapp.core.model.Student
 import com.schoolapp.core.model.StudentProfileTab
 import com.schoolapp.core.model.Subject
+import com.schoolapp.core.model.UserRole
 import com.schoolapp.domain.repository.AnalyticsRepository
+import com.schoolapp.domain.repository.AuthRepository
 import com.schoolapp.domain.repository.MarksRepository
 import com.schoolapp.domain.repository.MasterDataRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,6 +76,10 @@ data class AdminDashboardState(
         assessmentId = null,
     ),
     val totalStudents: Int = 0,
+    val currentUserName: String = "",
+    val currentUserCode: String = "",
+    val currentUserRole: UserRole? = null,
+    val schoolName: String = "",
     val passRatePct: Double = 0.0,
     val highRiskCount: Int = 0,
     val sparkline: List<Float> = emptyList(),
@@ -114,6 +121,13 @@ data class AdminDashboardState(
     val sectionTopperStudentId: String? = null,
     val dashboardRows: List<DashboardStudentRow> = emptyList(),
     val dashboardSearchDone: Boolean = false,
+    val passwordChangeLoading: Boolean = false,
+    val passwordChangeMessage: String? = null,
+    val passwordChangeError: Boolean = false,
+    val managedCredentialLoading: Boolean = false,
+    val managedCredentialResult: ManagedCredentialResult? = null,
+    val managedCredentialMessage: String? = null,
+    val managedCredentialError: Boolean = false,
     val gradebookSaving: Boolean = false,
     val publishReadinessMessage: String? = null,
     val publishReadinessError: Boolean = false,
@@ -122,6 +136,7 @@ data class AdminDashboardState(
 )
 
 class AdminViewModel(
+    private val authRepository: AuthRepository,
     private val masterDataRepository: MasterDataRepository,
     private val analyticsRepository: AnalyticsRepository,
     private val marksRepository: MarksRepository,
@@ -236,6 +251,7 @@ class AdminViewModel(
             val previous = _uiState.value
             _uiState.value = previous.copy(loading = true, error = null, info = null)
             runCatching {
+                val currentUser = authRepository.currentUser()
                 val sections = masterDataRepository.getSections()
                 val cycles = masterDataRepository.getCycles()
                 val selectedCycleId = previous.context.cycleId ?: previous.selectedCycleId ?: cycles.firstOrNull()?.cycleId
@@ -375,6 +391,10 @@ class AdminViewModel(
                     destination = previous.destination,
                     context = context,
                     totalStudents = totalStudents,
+                    currentUserName = currentUser?.displayName.orEmpty(),
+                    currentUserCode = currentUser?.code.orEmpty(),
+                    currentUserRole = currentUser?.role,
+                    schoolName = displaySchoolName(currentUser?.schoolId),
                     passRatePct = passRate,
                     highRiskCount = highRisk,
                     sparkline = spark.ifEmpty { listOf(62f, 66f, 71f, 69f, 74f, 79f) },
@@ -416,6 +436,13 @@ class AdminViewModel(
                     sectionTopperStudentId = sectionTopperId,
                     dashboardRows = if (contextChanged) emptyList() else previous.dashboardRows,
                     dashboardSearchDone = if (contextChanged) false else previous.dashboardSearchDone,
+                    passwordChangeLoading = previous.passwordChangeLoading,
+                    passwordChangeMessage = previous.passwordChangeMessage,
+                    passwordChangeError = previous.passwordChangeError,
+                    managedCredentialLoading = previous.managedCredentialLoading,
+                    managedCredentialResult = previous.managedCredentialResult,
+                    managedCredentialMessage = previous.managedCredentialMessage,
+                    managedCredentialError = previous.managedCredentialError,
                     gradebookSaving = false,
                     publishReadinessMessage = previous.publishReadinessMessage,
                     publishReadinessError = previous.publishReadinessError,
@@ -467,6 +494,172 @@ class AdminViewModel(
 
     fun selectCycle(cycleId: String) {
         selectContextCycle(cycleId)
+    }
+
+    fun clearPasswordChangeMessage() {
+        _uiState.value = _uiState.value.copy(passwordChangeMessage = null, passwordChangeError = false)
+    }
+
+    fun clearManagedCredentialFeedback() {
+        _uiState.value = _uiState.value.copy(
+            managedCredentialMessage = null,
+            managedCredentialError = false,
+            managedCredentialResult = null,
+        )
+    }
+
+    fun changeMyPassword(currentPassword: String, newPassword: String, confirmPassword: String) {
+        val state = _uiState.value
+        if (newPassword != confirmPassword) {
+            _uiState.value = state.copy(
+                passwordChangeMessage = "New password and confirm password do not match",
+                passwordChangeError = true,
+            )
+            return
+        }
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                passwordChangeLoading = true,
+                passwordChangeMessage = null,
+                passwordChangeError = false,
+            )
+            runCatching {
+                authRepository.changePassword(currentPassword = currentPassword, newPassword = newPassword)
+            }.onSuccess {
+                _uiState.value = _uiState.value.copy(
+                    passwordChangeLoading = false,
+                    passwordChangeMessage = "Password changed successfully",
+                    passwordChangeError = false,
+                )
+            }.onFailure { error ->
+                _uiState.value = _uiState.value.copy(
+                    passwordChangeLoading = false,
+                    passwordChangeMessage = error.message ?: "Unable to change password",
+                    passwordChangeError = true,
+                )
+            }
+        }
+    }
+
+    fun createStudentLogin(studentId: String, loginCode: String) {
+        val normalizedCode = loginCode.trim().lowercase()
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                managedCredentialLoading = true,
+                managedCredentialMessage = null,
+                managedCredentialError = false,
+                managedCredentialResult = null,
+            )
+            runCatching {
+                require(studentId.isNotBlank()) { "Select a student first" }
+                require(normalizedCode.isNotBlank()) { "Login code is required" }
+                require(normalizedCode.none { it.isWhitespace() }) { "Login code cannot contain spaces" }
+
+                val student = _uiState.value.studentsBySection.values
+                    .flatten()
+                    .firstOrNull { it.studentId == studentId }
+                    ?: error("Student not found")
+
+                authRepository.createManagedAccount(
+                    role = UserRole.STUDENT,
+                    loginCode = normalizedCode,
+                    displayName = student.fullName,
+                    studentId = student.studentId,
+                    sectionId = student.sectionId,
+                )
+            }.onSuccess { result ->
+                _uiState.value = _uiState.value.copy(
+                    managedCredentialLoading = false,
+                    managedCredentialResult = result,
+                    managedCredentialMessage = "Student login created. Share the temporary password.",
+                    managedCredentialError = false,
+                    info = "Student login created",
+                    error = null,
+                )
+                refresh()
+            }.onFailure { error ->
+                _uiState.value = _uiState.value.copy(
+                    managedCredentialLoading = false,
+                    managedCredentialMessage = error.message ?: "Unable to create student login",
+                    managedCredentialError = true,
+                    managedCredentialResult = null,
+                )
+            }
+        }
+    }
+
+    fun createTeacherLogin(displayName: String, loginCode: String, sectionId: String?) {
+        val normalizedCode = loginCode.trim().lowercase()
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                managedCredentialLoading = true,
+                managedCredentialMessage = null,
+                managedCredentialError = false,
+                managedCredentialResult = null,
+            )
+            runCatching {
+                require(displayName.isNotBlank()) { "Teacher name is required" }
+                require(normalizedCode.isNotBlank()) { "Login code is required" }
+                require(normalizedCode.none { it.isWhitespace() }) { "Login code cannot contain spaces" }
+
+                authRepository.createManagedAccount(
+                    role = UserRole.TEACHER,
+                    loginCode = normalizedCode,
+                    displayName = displayName.trim(),
+                    sectionId = sectionId?.takeIf { it.isNotBlank() },
+                )
+            }.onSuccess { result ->
+                _uiState.value = _uiState.value.copy(
+                    managedCredentialLoading = false,
+                    managedCredentialResult = result,
+                    managedCredentialMessage = "Teacher login created. Share the temporary password.",
+                    managedCredentialError = false,
+                    info = "Teacher login created",
+                    error = null,
+                )
+                refresh()
+            }.onFailure { error ->
+                _uiState.value = _uiState.value.copy(
+                    managedCredentialLoading = false,
+                    managedCredentialMessage = error.message ?: "Unable to create teacher login",
+                    managedCredentialError = true,
+                    managedCredentialResult = null,
+                )
+            }
+        }
+    }
+
+    fun resetManagedUserPassword(loginCode: String) {
+        val normalizedCode = loginCode.trim().lowercase()
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(
+                managedCredentialLoading = true,
+                managedCredentialMessage = null,
+                managedCredentialError = false,
+                managedCredentialResult = null,
+            )
+            runCatching {
+                require(normalizedCode.isNotBlank()) { "Login code is required" }
+                require(normalizedCode.none { it.isWhitespace() }) { "Login code cannot contain spaces" }
+                authRepository.resetManagedPassword(normalizedCode)
+            }.onSuccess { result ->
+                _uiState.value = _uiState.value.copy(
+                    managedCredentialLoading = false,
+                    managedCredentialResult = result,
+                    managedCredentialMessage = "Password reset complete. Share the new temporary password.",
+                    managedCredentialError = false,
+                    info = "Password reset complete",
+                    error = null,
+                )
+            }.onFailure { error ->
+                _uiState.value = _uiState.value.copy(
+                    managedCredentialLoading = false,
+                    managedCredentialMessage = error.message ?: "Unable to reset password",
+                    managedCredentialError = true,
+                    managedCredentialResult = null,
+                )
+            }
+        }
     }
 
     fun runDashboardSearch() {
@@ -1514,7 +1707,21 @@ class AdminViewModel(
     }
 
     companion object {
+        private fun displaySchoolName(schoolId: String?): String {
+            val raw = schoolId?.trim().orEmpty()
+            if (raw.isBlank()) return "School Performance Hub"
+            return raw
+                .replace('_', ' ')
+                .replace('-', ' ')
+                .split(' ')
+                .filter { it.isNotBlank() }
+                .joinToString(" ") { part ->
+                    part.lowercase().replaceFirstChar { c -> c.uppercase() }
+                }
+        }
+
         fun factory(
+            authRepository: AuthRepository,
             masterDataRepository: MasterDataRepository,
             analyticsRepository: AnalyticsRepository,
             marksRepository: MarksRepository,
@@ -1522,7 +1729,7 @@ class AdminViewModel(
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    AdminViewModel(masterDataRepository, analyticsRepository, marksRepository) as T
+                    AdminViewModel(authRepository, masterDataRepository, analyticsRepository, marksRepository) as T
             }
     }
 }

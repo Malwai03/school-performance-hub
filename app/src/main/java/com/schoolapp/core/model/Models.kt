@@ -128,3 +128,9 @@ data class SectionSummary(
     val topperStudentId: String?,
     val riskDistribution: Map<RiskLevel, Int>,
 )
+
+data class ManagedCredentialResult(
+    val loginCode: String,
+    val temporaryPassword: String,
+    val role: UserRole,
+)

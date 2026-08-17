@@ -4,6 +4,7 @@ import com.schoolapp.core.model.Assessment
 import com.schoolapp.core.model.AssessmentCycle
 import com.schoolapp.core.model.BulkScorePatch
 import com.schoolapp.core.model.GradeSection
+import com.schoolapp.core.model.ManagedCredentialResult
 import com.schoolapp.core.model.PublishReadiness
 import com.schoolapp.core.model.ResultSnapshot
 import com.schoolapp.core.model.SchoolUser
@@ -11,11 +12,21 @@ import com.schoolapp.core.model.ScoreEntry
 import com.schoolapp.core.model.SectionSummary
 import com.schoolapp.core.model.Student
 import com.schoolapp.core.model.Subject
+import com.schoolapp.core.model.UserRole
 
 interface AuthRepository {
     suspend fun signIn(loginCode: String, password: String): SchoolUser
     suspend fun signOut()
     suspend fun currentUser(): SchoolUser?
+    suspend fun changePassword(currentPassword: String, newPassword: String)
+    suspend fun createManagedAccount(
+        role: UserRole,
+        loginCode: String,
+        displayName: String,
+        studentId: String? = null,
+        sectionId: String? = null,
+    ): ManagedCredentialResult
+    suspend fun resetManagedPassword(loginCode: String): ManagedCredentialResult
 }
 
 interface MasterDataRepository {

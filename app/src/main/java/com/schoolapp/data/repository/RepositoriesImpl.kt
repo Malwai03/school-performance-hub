@@ -2,6 +2,7 @@ package com.schoolapp.data.repository
 
 import android.content.Context
 import android.net.Uri
+import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.functions.FirebaseFunctions
@@ -13,6 +14,7 @@ import com.schoolapp.core.model.Assessment
 import com.schoolapp.core.model.AssessmentCycle
 import com.schoolapp.core.model.BulkScorePatch
 import com.schoolapp.core.model.GradeSection
+import com.schoolapp.core.model.ManagedCredentialResult
 import com.schoolapp.core.model.PassStatus
 import com.schoolapp.core.model.PublishReadiness
 import com.schoolapp.core.model.ResultSnapshot
@@ -52,7 +54,7 @@ class AppContainer(context: Context) {
     private val functions: FirebaseFunctions? = runCatching { Firebase.functions }.getOrNull()
     private val storage: FirebaseStorage? = runCatching { Firebase.storage }.getOrNull()
 
-    val authRepository: AuthRepository = AuthRepositoryImpl(db, sessionStore, firebaseAuth, firestore)
+    val authRepository: AuthRepository = AuthRepositoryImpl(db, sessionStore, firebaseAuth, firestore, functions)
     val masterDataRepository: MasterDataRepository =
         MasterDataRepositoryImpl(db, firestore, sessionStore)
     val marksRepository: MarksRepository = MarksRepositoryImpl(db, firestore, functions, storage, sessionStore)
@@ -135,6 +137,7 @@ private class AuthRepositoryImpl(
     private val sessionStore: SessionStore,
     private val auth: FirebaseAuth?,
     private val firestore: FirebaseFirestore?,
+    private val functions: FirebaseFunctions?,
 ) : AuthRepository {
 
     override suspend fun signIn(loginCode: String, password: String): SchoolUser {
@@ -192,6 +195,111 @@ private class AuthRepositoryImpl(
             val uid = sessionStore.getUserId() ?: auth?.currentUser?.uid ?: return@withContext null
             db.userDao().getByUid(uid)?.toDomain()
         }
+    }
+
+    override suspend fun changePassword(currentPassword: String, newPassword: String) {
+        withContext(Dispatchers.IO) {
+            require(currentPassword.isNotBlank()) { "Current password is required" }
+            require(newPassword.isNotBlank()) { "New password is required" }
+            require(newPassword.length >= 6) { "New password must be at least 6 characters" }
+            require(newPassword != currentPassword) { "New password must be different" }
+
+            val firebaseAuth = auth ?: throw IllegalStateException(
+                "Firebase Auth is not configured. Add google-services.json to enable password changes.",
+            )
+            val current = firebaseAuth.currentUser ?: throw IllegalStateException(
+                "No Firebase user session found. Sign in using Firebase credentials first.",
+            )
+            val email = current.email ?: throw IllegalStateException("Current Firebase account has no email")
+            val credential = EmailAuthProvider.getCredential(email, currentPassword)
+            current.reauthenticate(credential).await()
+            current.updatePassword(newPassword).await()
+        }
+    }
+
+    override suspend fun createManagedAccount(
+        role: UserRole,
+        loginCode: String,
+        displayName: String,
+        studentId: String?,
+        sectionId: String?,
+    ): ManagedCredentialResult {
+        return withContext(Dispatchers.IO) {
+            require(role == UserRole.STUDENT || role == UserRole.TEACHER) {
+                "Only student or teacher accounts can be created"
+            }
+            require(loginCode.isNotBlank()) { "Login code is required" }
+            require(displayName.isNotBlank()) { "Display name is required" }
+            if (role == UserRole.STUDENT) {
+                require(!studentId.isNullOrBlank()) { "Student profile must be selected" }
+            }
+
+            val cloudFunctions = functions ?: throw IllegalStateException(
+                "Firebase Functions not configured. Add google-services.json and deploy functions.",
+            )
+            val schoolId = currentSchoolId()
+            val payload = mutableMapOf<String, Any>(
+                "schoolId" to schoolId,
+                "role" to role.name,
+                "loginCode" to loginCode.trim(),
+                "displayName" to displayName.trim(),
+            )
+            studentId?.takeIf { it.isNotBlank() }?.let { payload["studentId"] = it }
+            sectionId?.takeIf { it.isNotBlank() }?.let { payload["sectionId"] = it }
+
+            val result = cloudFunctions
+                .getHttpsCallable("createManagedUserAccount")
+                .call(payload)
+                .await()
+                .data as? Map<*, *>
+                ?: error("Invalid response from createManagedUserAccount")
+
+            ManagedCredentialResult(
+                loginCode = (result["loginCode"] as? String)?.ifBlank { null }
+                    ?: loginCode.trim(),
+                temporaryPassword = result["temporaryPassword"] as? String
+                    ?: error("Temporary password missing from response"),
+                role = (result["role"] as? String)
+                    ?.let { runCatching { UserRole.valueOf(it) }.getOrNull() }
+                    ?: role,
+            )
+        }
+    }
+
+    override suspend fun resetManagedPassword(loginCode: String): ManagedCredentialResult {
+        return withContext(Dispatchers.IO) {
+            require(loginCode.isNotBlank()) { "Login code is required" }
+            val cloudFunctions = functions ?: throw IllegalStateException(
+                "Firebase Functions not configured. Add google-services.json and deploy functions.",
+            )
+
+            val result = cloudFunctions
+                .getHttpsCallable("resetManagedUserPassword")
+                .call(
+                    mapOf(
+                        "schoolId" to currentSchoolId(),
+                        "loginCode" to loginCode.trim(),
+                    ),
+                )
+                .await()
+                .data as? Map<*, *>
+                ?: error("Invalid response from resetManagedUserPassword")
+
+            ManagedCredentialResult(
+                loginCode = (result["loginCode"] as? String)?.ifBlank { null }
+                    ?: loginCode.trim(),
+                temporaryPassword = result["temporaryPassword"] as? String
+                    ?: error("Temporary password missing from response"),
+                role = (result["role"] as? String)
+                    ?.let { runCatching { UserRole.valueOf(it) }.getOrNull() }
+                    ?: UserRole.STUDENT,
+            )
+        }
+    }
+
+    private suspend fun currentSchoolId(): String {
+        val uid = sessionStore.getUserId()
+        return uid?.let { db.userDao().getByUid(it)?.schoolId } ?: DEFAULT_SCHOOL_ID
     }
 }
 

@@ -51,6 +51,7 @@ fun SchoolNavGraph(
     )
     val adminViewModel: AdminViewModel = viewModel(
         factory = AdminViewModel.factory(
+            appContainer.authRepository,
             appContainer.masterDataRepository,
             appContainer.analyticsRepository,
             appContainer.marksRepository,

@@ -65,6 +65,13 @@ fun RosterScreen(
 
     var promoteFromSectionId by rememberSaveable { mutableStateOf(state.context.sectionId.orEmpty()) }
     var promoteToSectionId by rememberSaveable { mutableStateOf("") }
+    var credentialStudentSectionId by rememberSaveable { mutableStateOf(state.context.sectionId.orEmpty()) }
+    var credentialStudentId by rememberSaveable { mutableStateOf("") }
+    var credentialStudentCode by rememberSaveable { mutableStateOf("") }
+    var credentialTeacherName by rememberSaveable { mutableStateOf("") }
+    var credentialTeacherCode by rememberSaveable { mutableStateOf("") }
+    var credentialTeacherSectionId by rememberSaveable { mutableStateOf(state.context.sectionId.orEmpty()) }
+    var credentialResetCode by rememberSaveable { mutableStateOf("") }
 
     val subjectOptions = subjectSectionId.takeIf { it.isNotBlank() }
         ?.let { state.subjectsBySection[it].orEmpty() }
@@ -72,6 +79,11 @@ fun RosterScreen(
         .sortedBy { it.name }
         .map { DropdownOption(it.subjectId, it.name) }
     val studentOptions = studentSectionId.takeIf { it.isNotBlank() }
+        ?.let { state.studentsBySection[it].orEmpty() }
+        .orEmpty()
+        .sortedBy { it.rollNumber }
+        .map { DropdownOption(it.studentId, "${it.rollNumber}. ${it.fullName}") }
+    val credentialStudentOptions = credentialStudentSectionId.takeIf { it.isNotBlank() }
         ?.let { state.studentsBySection[it].orEmpty() }
         .orEmpty()
         .sortedBy { it.rollNumber }
@@ -90,6 +102,12 @@ fun RosterScreen(
         }
         if (promoteFromSectionId.isBlank()) {
             promoteFromSectionId = state.context.sectionId.orEmpty()
+        }
+        if (credentialStudentSectionId.isBlank()) {
+            credentialStudentSectionId = state.context.sectionId.orEmpty()
+        }
+        if (credentialTeacherSectionId.isBlank()) {
+            credentialTeacherSectionId = state.context.sectionId.orEmpty()
         }
     }
 
@@ -125,6 +143,14 @@ fun RosterScreen(
         } else if (selectedStudentId == "new") {
             studentName = ""
             studentRoll = ""
+        }
+    }
+
+    LaunchedEffect(credentialStudentId, credentialStudentSectionId, state.studentsBySection) {
+        val selected = state.studentsBySection[credentialStudentSectionId].orEmpty()
+            .firstOrNull { it.studentId == credentialStudentId }
+        if (selected != null && credentialStudentCode.isBlank()) {
+            credentialStudentCode = "student${selected.rollNumber.toString().padStart(3, '0')}"
         }
     }
 
@@ -382,6 +408,159 @@ fun RosterScreen(
                     enabled = promoteFromSectionId.isNotBlank() && promoteToSectionId.isNotBlank() && promoteFromSectionId != promoteToSectionId,
                 ) {
                     Text("Promote All Students")
+                }
+            }
+        }
+
+        GlassCard(Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Account Credentials", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Create student/teacher logins and reset passwords. Temporary passwords are auto-generated.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextSecondary,
+                )
+
+                HorizontalDivider()
+
+                Text("Create Student Login", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                FormDropdownField(
+                    label = "Student Section",
+                    options = sectionOptions,
+                    selectedId = credentialStudentSectionId.ifBlank { null },
+                    onSelected = {
+                        credentialStudentSectionId = it
+                        credentialStudentId = ""
+                        credentialStudentCode = ""
+                        viewModel.clearManagedCredentialFeedback()
+                    },
+                    enabled = sectionOptions.isNotEmpty(),
+                )
+                FormDropdownField(
+                    label = "Student",
+                    options = credentialStudentOptions,
+                    selectedId = credentialStudentId.ifBlank { null },
+                    onSelected = {
+                        credentialStudentId = it
+                        credentialStudentCode = ""
+                        viewModel.clearManagedCredentialFeedback()
+                    },
+                    enabled = credentialStudentSectionId.isNotBlank(),
+                )
+                OutlinedTextField(
+                    value = credentialStudentCode,
+                    onValueChange = {
+                        credentialStudentCode = it.lowercase().replace(" ", "")
+                        viewModel.clearManagedCredentialFeedback()
+                    },
+                    label = { Text("Login Code") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                Button(
+                    onClick = { viewModel.createStudentLogin(credentialStudentId, credentialStudentCode) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.managedCredentialLoading &&
+                        credentialStudentSectionId.isNotBlank() &&
+                        credentialStudentId.isNotBlank() &&
+                        credentialStudentCode.isNotBlank(),
+                ) {
+                    Text(if (state.managedCredentialLoading) "Working..." else "Create Student Login")
+                }
+
+                HorizontalDivider()
+
+                Text("Create Teacher Login", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                OutlinedTextField(
+                    value = credentialTeacherName,
+                    onValueChange = {
+                        credentialTeacherName = it
+                        viewModel.clearManagedCredentialFeedback()
+                    },
+                    label = { Text("Teacher Name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = credentialTeacherCode,
+                        onValueChange = {
+                            credentialTeacherCode = it.lowercase().replace(" ", "")
+                            viewModel.clearManagedCredentialFeedback()
+                        },
+                        label = { Text("Login Code") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                    )
+                    FormDropdownField(
+                        label = "Section (Optional)",
+                        options = listOf(DropdownOption("", "None")) + sectionOptions,
+                        selectedId = credentialTeacherSectionId.ifBlank { "" },
+                        onSelected = {
+                            credentialTeacherSectionId = it
+                            viewModel.clearManagedCredentialFeedback()
+                        },
+                        modifier = Modifier.weight(1f),
+                        enabled = true,
+                    )
+                }
+                Button(
+                    onClick = {
+                        viewModel.createTeacherLogin(
+                            displayName = credentialTeacherName,
+                            loginCode = credentialTeacherCode,
+                            sectionId = credentialTeacherSectionId.ifBlank { null },
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.managedCredentialLoading &&
+                        credentialTeacherName.isNotBlank() &&
+                        credentialTeacherCode.isNotBlank(),
+                ) {
+                    Text(if (state.managedCredentialLoading) "Working..." else "Create Teacher Login")
+                }
+
+                HorizontalDivider()
+
+                Text("Reset Password", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                OutlinedTextField(
+                    value = credentialResetCode,
+                    onValueChange = {
+                        credentialResetCode = it.lowercase().replace(" ", "")
+                        viewModel.clearManagedCredentialFeedback()
+                    },
+                    label = { Text("Login Code") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                Button(
+                    onClick = { viewModel.resetManagedUserPassword(credentialResetCode) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !state.managedCredentialLoading && credentialResetCode.isNotBlank(),
+                ) {
+                    Text(if (state.managedCredentialLoading) "Working..." else "Reset Password")
+                }
+
+                state.managedCredentialMessage?.let { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (state.managedCredentialError) DangerRed else SuccessGreen,
+                    )
+                }
+                state.managedCredentialResult?.let { result ->
+                    GlassCard(Modifier.fillMaxWidth()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("Temporary Credentials", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                            Text("Role: ${result.role.name}", style = MaterialTheme.typography.bodySmall)
+                            Text("Login Code: ${result.loginCode}", style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "Temporary Password: ${result.temporaryPassword}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
                 }
             }
         }

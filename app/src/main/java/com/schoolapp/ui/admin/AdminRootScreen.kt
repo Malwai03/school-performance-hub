@@ -90,6 +90,7 @@ fun AdminRootScreen(
 
             AdminDestination.SETUP -> AdminProfileScreen(
                 state = state,
+                viewModel = viewModel,
                 onLogout = onLogout,
                 modifier = Modifier.padding(padding),
             )
