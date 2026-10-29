@@ -28,10 +28,47 @@ Role-based student performance app for grades 1-10 with offline-first Android cl
 ### Firebase Functions
 ```bash
 cd backend/functions
-npm install
+npm ci
 npm run build
 npm test
 ```
+
+`npm test` (or `npm run test:unit`) runs lightweight grading and rules-harness unit tests.
+Security rules have a separate required check:
+
+```bash
+cd backend/functions
+npm ci
+npm run test:rules
+```
+
+Use Node 20 and Java 17+ on `PATH`. The rules command downloads the pinned Firebase
+CLI (13.35.1) and emulator binaries on first use, so that first run needs network
+access. It starts only Firestore (127.0.0.1:8080) and Storage (127.0.0.1:9199), runs
+both suites, then shuts them down. Keep those ports free. Missing Java, downloads
+or occupied ports cause the command to fail; they never skip the tests.
+No Firebase login, service account, production credentials or deployed project is
+needed: `firebase.rules-test.json` and the `demo-school-rules` project keep this
+run separate from `.firebaserc` and live Firebase resources.
+
+`npm run test:rules:run` is the inner Jest command for an already running pair of
+loopback emulators using that same demo project. It fails with setup instructions
+when either emulator host variable is missing. Fixtures bypass rules only while
+seeding, then authenticated/anonymous client operations exercise the actual rules.
+Firestore data is cleared before every test; Storage tests also clear all objects.
+The rules reporter prints executed/skipped counts for each suite and fails if
+either suite is absent, empty, skipped or contains todo tests. Detailed counts are
+written to `backend/functions/rules-test-results.json` and uploaded by the
+`Backend tests` GitHub Actions workflow, which runs build, unit and rules checks.
+
+The rules checks cover school user records, teacher assignments and score bounds,
+student ownership, published/unpublished result access, backend-only result
+writes, and Storage tenant/role boundaries. Students can read their own results
+only after the linked assessment cycle is published; staff can inspect drafts.
+Storage import access requires the ADMIN role, an ADMIN record in that school's
+`users` collection (the same membership the Firestore rules use), and, when the token
+has a `schoolId` claim, a matching one. These tests validate local emulator behavior;
+they do not deploy rules or validate production IAM or callable functions.
 
 Deploy (from repo root):
 ```bash

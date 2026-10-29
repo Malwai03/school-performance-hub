@@ -9,6 +9,11 @@
 # Firebase functions
 /backend/functions/node_modules/
 /backend/functions/lib/
+/backend/functions/rules-test-results.json
+**/.npm-cache/
+**/firebase-debug.log
+**/firestore-debug.log
+**/storage-debug.log
 
 # Logs
 npm-debug.log*

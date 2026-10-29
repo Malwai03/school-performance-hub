@@ -117,7 +117,8 @@ service cloud.firestore {
 
       match /resultSnapshots/{snapshotId} {
         allow read: if isAdmin(schoolId) || isTeacher(schoolId) || (
-          isStudent(schoolId) && resource.data.studentId == userData(schoolId).studentId
+          isStudent(schoolId) && resource.data.studentId == userData(schoolId).studentId &&
+          get(/databases/$(database)/documents/schools/$(schoolId)/assessmentCycles/$(resource.data.cycleId)).data.published == true
         );
         allow create, update, delete: if false;
       }
