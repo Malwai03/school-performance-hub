@@ -8,6 +8,7 @@ import { getStorage } from "firebase-admin/storage";
 import { getMessaging } from "firebase-admin/messaging";
 import { parse as parseCsv } from "csv-parse/sync";
 import * as XLSX from "xlsx";
+import { generateTemporaryPassword } from "./password";
 
 if (!getApps().length) {
   initializeApp();
@@ -71,15 +72,6 @@ function round2(value: number): number {
 
 function hiddenEmailFromCode(loginCode: string): string {
   return `${loginCode.trim().toLowerCase()}@schoolapp.local`;
-}
-
-function generateTemporaryPassword(length = 10): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-  let output = "";
-  for (let i = 0; i < length; i++) {
-    output += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
-  return `${output}!`;
 }
 
 function computeSubjectPercentage(assessments: AssessmentDoc[], scoreByAssessment: Map<string, ScoreDoc>): { percentage: number; complete: boolean } {
