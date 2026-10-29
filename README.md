@@ -40,7 +40,8 @@ firebase emulators:exec --only firestore --project demo-school-score-results "np
 ```
 The tests invoke the exported score handler with real emulator snapshots; they do
 not require a Functions emulator or send notifications. Without
-`FIRESTORE_EMULATOR_HOST`, the integration suite is skipped.
+`FIRESTORE_EMULATOR_HOST`, the integration suite is skipped. Current firebase-tools
+needs Java 21; with Java 17 use `npx firebase-tools@13.35.1 emulators:exec ...`.
 
 Deploy (from repo root):
 ```bash
@@ -77,8 +78,9 @@ firebase deploy --only firestore:rules,storage:rules,functions
 
 ## Notes
 - Result snapshots are backend computed and write-protected from clients.
-- Score creates, edits, deletes and reassignments refresh affected student results
-  and section analytics. Published results remain mutable, matching the existing
+- Score creates, edits, deletes and reassignments refresh affected student results,
+  and the section analytics of cycles that are already published (draft cycles get
+  theirs at publish). Published results remain mutable, matching the existing
   score-edit behavior; recomputation does not republish or send notifications.
 - Scores contain no historical cycle/section identifiers, so recomputation also
   refreshes existing snapshots for the affected students to recover old targets
