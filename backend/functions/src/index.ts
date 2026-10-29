@@ -546,6 +546,8 @@ async function computeAndPersistStudentResult(
   const result = computeResult(subjects, assessments, studentScores, previous);
   const snapshotId = `${cycleId}_${sectionId}_${studentId}`;
 
+  // Replace the computed document so removed subject percentages cannot survive
+  // a recursive map merge with the previous result.
   await db
     .collection("schools")
     .doc(schoolId)
@@ -563,7 +565,6 @@ async function computeAndPersistStudentResult(
         riskLevel: result.riskLevel,
         updatedAt: FieldValue.serverTimestamp(),
       },
-      { merge: true },
     );
 
   return result;
@@ -761,36 +762,56 @@ export const onScoreWriteRecompute = onDocumentWritten(
     region: REGION,
   },
   async (event) => {
-    const after = event.data?.after;
-    if (!after?.exists) {
-      return;
-    }
-
     const schoolId = event.params.schoolId;
-    const score = after.data() as ScoreDoc;
-    if (!score.assessmentId || !score.studentId) {
-      return;
+    const schoolRef = db.collection("schools").doc(schoolId);
+    const scores = [event.data?.before, event.data?.after]
+      .filter((snapshot) => snapshot?.exists)
+      .map((snapshot) => snapshot!.data() as ScoreDoc)
+      .filter((score) => typeof score.studentId === "string" && score.studentId);
+    const targets = new Map<string, { cycleId: string; sectionId: string; studentId: string }>();
+    const addTarget = (cycleId: string, sectionId: string, studentId: string) => {
+      if (cycleId && sectionId) {
+        targets.set(JSON.stringify([cycleId, sectionId, studentId]), { cycleId, sectionId, studentId });
+      }
+    };
+
+    for (const studentId of new Set(scores.map((score) => score.studentId))) {
+      // A score has no cycle/section history. Existing snapshots recover old
+      // targets even if its assessment was deleted or moved before delivery.
+      const snapshots = await schoolRef.collection("resultSnapshots").where("studentId", "==", studentId).get();
+      for (const snapshot of snapshots.docs) {
+        addTarget(String(snapshot.get("cycleId") || ""), String(snapshot.get("sectionId") || ""), studentId);
+      }
     }
 
-    const assessmentDoc = await db
-      .collection("schools")
-      .doc(schoolId)
-      .collection("assessments")
-      .doc(score.assessmentId)
-      .get();
-
-    if (!assessmentDoc.exists) {
-      logger.warn("Assessment not found for score", { schoolId, scoreId: event.params.scoreId });
-      return;
+    for (const assessmentId of new Set(scores.map((score) => score.assessmentId).filter(Boolean))) {
+      const assessmentDoc = await schoolRef.collection("assessments").doc(assessmentId).get();
+      if (!assessmentDoc.exists) {
+        logger.warn("Assessment not found for score", { schoolId, scoreId: event.params.scoreId });
+        continue;
+      }
+      for (const score of scores.filter((candidate) => candidate.assessmentId === assessmentId)) {
+        addTarget(String(assessmentDoc.get("cycleId") || ""), String(assessmentDoc.get("sectionId") || ""), score.studentId);
+      }
     }
 
-    const cycleId = String(assessmentDoc.get("cycleId") || "");
-    const sectionId = String(assessmentDoc.get("sectionId") || "");
-    if (!cycleId || !sectionId) {
-      return;
+    const sections = new Map<string, { cycleId: string; sectionId: string }>();
+    for (const { cycleId, sectionId, studentId } of targets.values()) {
+      // Re-read current scores, never apply event marks or increment counters:
+      // replays use the current result inputs rather than historical marks.
+      await computeAndPersistStudentResult(schoolId, cycleId, sectionId, studentId);
+      sections.set(JSON.stringify([cycleId, sectionId]), { cycleId, sectionId });
     }
 
-    await computeAndPersistStudentResult(schoolId, cycleId, sectionId, score.studentId);
+    for (const { cycleId, sectionId } of sections.values()) {
+      // Section analytics are built when a cycle is published. After that, keep them in step with
+      // score changes; recomputing a whole section on every draft-grading write would cost a read per
+      // student each time.
+      const cycle = await schoolRef.collection("assessmentCycles").doc(cycleId).get();
+      if (cycle.get("published") === true) {
+        await computeAndPersistSectionResults(schoolId, cycleId, sectionId);
+      }
+    }
   },
 );
 
