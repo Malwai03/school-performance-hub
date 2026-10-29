@@ -126,6 +126,7 @@ describeWithEmulator("score result recomputation", () => {
     await school.collection("assessments").doc("a2").set({
       cycleId: "c2", sectionId: "s2", subjectId: "math", maxMarks: 100,
     });
+    await school.collection("assessmentCycles").doc("c2").set({ published: true });
     await writeScore("score", "alice", 80);
     await writeScore("score", "bob", 70, "a2");
     expect((await snapshot("alice"))?.passStatus).toBe("INCOMPLETE");
@@ -149,6 +150,13 @@ describeWithEmulator("score result recomputation", () => {
     await deliver(before, await ref.get());
     expect(await snapshot("alice")).toMatchObject({ subjectPercentages: {}, overallPercentage: null, passStatus: "INCOMPLETE" });
     expect(await analytics()).toMatchObject({ passCount: 0, incompleteCount: 2, averagePct: 0, topperStudentId: null });
+  });
+
+  test("draft cycles refresh student results but leave section analytics to publish time", async () => {
+    await school.collection("assessmentCycles").doc("c1").set({ published: false });
+    await writeScore("alice-math", "alice", 80);
+    expect((await snapshot("alice"))?.overallPercentage).toBe(80);
+    expect((await school.collection("sectionAnalytics").get()).empty).toBe(true);
   });
 
   test("missing assessment without cached targets is a safe no-op", async () => {

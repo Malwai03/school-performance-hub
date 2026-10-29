@@ -804,7 +804,13 @@ export const onScoreWriteRecompute = onDocumentWritten(
     }
 
     for (const { cycleId, sectionId } of sections.values()) {
-      await computeAndPersistSectionResults(schoolId, cycleId, sectionId);
+      // Section analytics are built when a cycle is published. After that, keep them in step with
+      // score changes; recomputing a whole section on every draft-grading write would cost a read per
+      // student each time.
+      const cycle = await schoolRef.collection("assessmentCycles").doc(cycleId).get();
+      if (cycle.get("published") === true) {
+        await computeAndPersistSectionResults(schoolId, cycleId, sectionId);
+      }
     }
   },
 );
