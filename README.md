@@ -33,6 +33,15 @@ npm run build
 npm test
 ```
 
+Score recomputation integration tests require the Firestore emulator and Firebase CLI.
+From the repo root, run:
+```bash
+firebase emulators:exec --only firestore --project demo-school-score-results "npm --prefix backend/functions test -- --runTestsByPath test/score-recompute.spec.ts test/logic.spec.ts"
+```
+The tests invoke the exported score handler with real emulator snapshots; they do
+not require a Functions emulator or send notifications. Without
+`FIRESTORE_EMULATOR_HOST`, the integration suite is skipped.
+
 Deploy (from repo root):
 ```bash
 firebase deploy --only firestore:rules,storage:rules,functions
@@ -68,5 +77,13 @@ firebase deploy --only firestore:rules,storage:rules,functions
 
 ## Notes
 - Result snapshots are backend computed and write-protected from clients.
+- Score creates, edits, deletes and reassignments refresh affected student results
+  and section analytics. Published results remain mutable, matching the existing
+  score-edit behavior; recomputation does not republish or send notifications.
+- Scores contain no historical cycle/section identifiers, so recomputation also
+  refreshes existing snapshots for the affected students to recover old targets
+  when an assessment has moved or disappeared. Replays read current scores rather
+  than applying event marks or adding to counters. Computed snapshot documents are
+  replaced so removed subject percentages are cleared.
 - App ships with local demo seed data and backend-ready contract surfaces.
 - CSV/XLSX import expects files in Firebase Storage under import paths.
