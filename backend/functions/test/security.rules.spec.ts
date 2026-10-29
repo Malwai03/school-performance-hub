@@ -60,7 +60,7 @@ describe("firestore security rules", () => {
   test("assigned teacher can create and update scores", async () => {
     const db = env.authenticatedContext("teacher-uid").firestore();
     await assertSucceeds(db.doc(`schools/${SCHOOL}/scores/new`).set({
-      assessmentId: "math", studentId: "student-2", obtainedMarks: 90,
+      scoreId: "new", assessmentId: "math", studentId: "student-2", obtainedMarks: 90,
     }));
     await assertSucceeds(db.doc(`schools/${SCHOOL}/scores/other`).update({ obtainedMarks: 90 }));
   });

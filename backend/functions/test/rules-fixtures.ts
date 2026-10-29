@@ -30,8 +30,11 @@ export async function seedSchool(env: RulesTestEnvironment) {
     put("assessments/math", { sectionId: "g1_a", subjectId: "math", maxMarks: 100 });
     put("teacherAssignments/g1_a_math_teacher-uid", { teacherId: "teacher-uid" });
     put("teacherAssignments/g1_a_math_missing-teacher", { teacherId: "missing-teacher" });
-    put("scores/own", { assessmentId: "math", studentId: "student-1", obtainedMarks: 50 });
-    put("scores/other", { assessmentId: "math", studentId: "student-2", obtainedMarks: 50 });
+    // Score writes need an enrolled student in the assessment's section and scoreId == doc id (issue #6).
+    put("students/student-1", { studentId: "student-1", sectionId: "g1_a" });
+    put("students/student-2", { studentId: "student-2", sectionId: "g1_a" });
+    put("scores/own", { scoreId: "own", assessmentId: "math", studentId: "student-1", obtainedMarks: 50 });
+    put("scores/other", { scoreId: "other", assessmentId: "math", studentId: "student-2", obtainedMarks: 50 });
     put("assessmentCycles/published", { published: true });
     put("assessmentCycles/draft", { published: false });
     put("resultSnapshots/published-own", { studentId: "student-1", cycleId: "published" });

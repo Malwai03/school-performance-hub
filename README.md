@@ -70,6 +70,14 @@ Storage import access requires the ADMIN role, an ADMIN record in that school's
 has a `schoolId` claim, a matching one. These tests validate local emulator behavior;
 they do not deploy rules or validate production IAM or callable functions.
 
+Score writes require an existing student in the assessment's section, numeric
+marks between zero and its maximum, and `scoreId` equal to the document ID.
+Both teachers and admins follow these checks; only teachers need the matching
+section/subject assignment. Updates preserve `studentId`, `assessmentId`, and
+`scoreId`. Score IDs remain opaque, matching the Android sync contract; no new
+ID format is imposed. Admin deletion is still permitted. Existing invalid score
+records need separate administrator review before these rules are deployed.
+
 Deploy (from repo root):
 ```bash
 firebase deploy --only firestore:rules,storage:rules,functions
