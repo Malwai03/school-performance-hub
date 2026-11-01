@@ -14,22 +14,25 @@ describe("rules CI gate", () => {
   const storage = suite("storage.rules.spec.ts");
   const score = suite("score.rules.spec.ts");
   const appsync = suite("appsync.rules.spec.ts");
+  const teacherScope = suite("teacherscope.rules.spec.ts");
 
   beforeEach(() => { jest.spyOn(console, "log").mockImplementation(() => {}); });
   afterEach(() => { jest.restoreAllMocks(); });
 
   test("accepts executed tests from every rules suite", () => {
     const reporter = new RulesReporter();
-    reporter.onRunComplete(new Set(), { testResults: [firestore, storage, score, appsync] });
+    reporter.onRunComplete(new Set(), { testResults: [firestore, storage, score, appsync, teacherScope] });
     expect(reporter.getLastError()).toBeUndefined();
   });
 
   test.each([
-    ["missing suite", [firestore, storage, score]],
-    ["empty suite", [firestore, suite("storage.rules.spec.ts", 0), score, appsync]],
-    ["skipped test", [firestore, suite("storage.rules.spec.ts", 1, 1), score, appsync]],
-    ["todo test", [firestore, storage, suite("score.rules.spec.ts", 1, 0, 1), appsync]],
-    ["skipped app sync test", [firestore, storage, score, suite("appsync.rules.spec.ts", 1, 1)]],
+    ["missing suite", [firestore, storage, score, teacherScope]],
+    ["missing teacher scope suite", [firestore, storage, score, appsync]],
+    ["empty suite", [firestore, suite("storage.rules.spec.ts", 0), score, appsync, teacherScope]],
+    ["skipped test", [firestore, suite("storage.rules.spec.ts", 1, 1), score, appsync, teacherScope]],
+    ["todo test", [firestore, storage, suite("score.rules.spec.ts", 1, 0, 1), appsync, teacherScope]],
+    ["skipped app sync test", [firestore, storage, score, suite("appsync.rules.spec.ts", 1, 1), teacherScope]],
+    ["skipped teacher scope test", [firestore, storage, score, appsync, suite("teacherscope.rules.spec.ts", 1, 1)]],
   ])("rejects a green Jest result with a %s", (_label, testResults) => {
     const reporter = new RulesReporter();
     reporter.onRunComplete(new Set(), { testResults });
@@ -39,7 +42,7 @@ describe("rules CI gate", () => {
   test("rejects skips in any additional rules suite", () => {
     const reporter = new RulesReporter();
     reporter.onRunComplete(new Set(), {
-      testResults: [firestore, storage, score, appsync], numPendingTests: 1, numPendingTestSuites: 1,
+      testResults: [firestore, storage, score, appsync, teacherScope], numPendingTests: 1, numPendingTestSuites: 1,
     });
     expect(reporter.getLastError()).toBeInstanceOf(Error);
   });

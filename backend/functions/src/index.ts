@@ -9,6 +9,7 @@ import { getMessaging } from "firebase-admin/messaging";
 import { parse as parseCsv } from "csv-parse/sync";
 import * as XLSX from "xlsx";
 import { requireAdminForSchool, requireImportFileRef, requireManagedLoginInSchool } from "./schoolAuth";
+import { syncTeacherAssignment } from "./teacherScope";
 
 if (!getApps().length) {
   initializeApp();
@@ -749,6 +750,19 @@ export const publishCycleResults = onCall({ region: REGION }, async (request) =>
   await notifySectionPublish(schoolId, sectionId, cycleId);
   return summary;
 });
+
+// The Firestore read rules give a teacher the students, assessments and marks of their assignments
+// through users/{teacherUid}.assignmentSections; this keeps that map in step with teacherAssignments.
+export const onTeacherAssignmentWrite = onDocumentWritten(
+  {
+    document: "schools/{schoolId}/teacherAssignments/{assignmentId}",
+    region: REGION,
+  },
+  async (event) => {
+    const teacherUids = [event.data?.before?.get("teacherUid"), event.data?.after?.get("teacherUid")];
+    await syncTeacherAssignment(db, event.params.schoolId, event.params.assignmentId, teacherUids);
+  },
+);
 
 export const onScoreWriteRecompute = onDocumentWritten(
   {

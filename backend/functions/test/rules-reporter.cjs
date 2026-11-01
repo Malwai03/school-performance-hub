@@ -1,6 +1,7 @@
 const path = require("node:path");
 
-// A green CI run must contain assertions from every rule suite (security, storage, score, app sync), with no skips.
+// A green CI run must contain assertions from every rule suite (security, storage, score, app sync,
+// teacher scope), with no skips.
 class RulesReporter {
   onRunComplete(_contexts, results) {
     this.error = undefined;
@@ -9,6 +10,7 @@ class RulesReporter {
     }
     const expected = [
       "security.rules.spec.ts", "storage.rules.spec.ts", "score.rules.spec.ts", "appsync.rules.spec.ts",
+      "teacherscope.rules.spec.ts",
     ];
     for (const file of expected) {
       const suite = results.testResults.find((result) => path.basename(result.testFilePath) === file);
