@@ -22,6 +22,8 @@ data class StudentDashboardState(
     val rankHint: String = "",
     val subjectNames: Map<String, String> = emptyMap(),
     val cycleName: String = "",
+    /** The server could not be asked for results just now: these are the saved ones. */
+    val resultsMayBeOutdated: Boolean = false,
     val error: String? = null,
 )
 
@@ -47,7 +49,8 @@ class StudentViewModel(
             _uiState.value = _uiState.value.copy(loading = true, error = null)
             runCatching {
                 val user = authRepository.currentUser() ?: error("No session")
-                val trend = analyticsRepository.getStudentTrend(user.uid)
+                val studentTrend = analyticsRepository.getStudentTrend(user.uid)
+                val trend = studentTrend.snapshots
                 val latest = trend.lastOrNull()
 
                 val subjectNames = if (latest != null) {
@@ -92,6 +95,7 @@ class StudentViewModel(
                     },
                     subjectNames = subjectNames,
                     cycleName = cycleName,
+                    resultsMayBeOutdated = studentTrend.serverUnreachable,
                 )
             }.onSuccess { _uiState.value = it }
                 .onFailure { error -> _uiState.value = _uiState.value.copy(loading = false, error = error.message) }

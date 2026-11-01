@@ -5,7 +5,9 @@ import android.net.Uri
 import androidx.room.withTransaction
 import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Source
 import com.google.firebase.functions.FirebaseFunctions
 import com.google.firebase.functions.ktx.functions
 import com.google.firebase.ktx.Firebase
@@ -33,6 +35,7 @@ import com.schoolapp.core.logic.GradingEngine
 import com.schoolapp.core.logic.GradingPolicy
 import com.schoolapp.core.logic.LocalDataPolicy
 import com.schoolapp.core.logic.LocalFirstChange
+import com.schoolapp.core.logic.ResultSync
 import com.schoolapp.core.logic.SchoolScope
 import com.schoolapp.core.logic.TeacherScope
 import com.schoolapp.core.logic.UnsyncedMarksChoice
@@ -54,7 +57,9 @@ import com.schoolapp.domain.repository.AuthRepository
 import com.schoolapp.domain.repository.MarksRepository
 import com.schoolapp.domain.repository.MasterDataRepository
 import com.schoolapp.domain.repository.SignOutResult
+import com.schoolapp.domain.repository.StudentTrend
 import com.schoolapp.data.sync.ScoreUploader
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -80,7 +85,8 @@ class AppContainer(context: Context) {
         MasterDataRepositoryImpl(db, firestore, sessionStore, firebaseAuth)
     val marksRepository: MarksRepository =
         MarksRepositoryImpl(db, firestore, functions, storage, sessionStore, firebaseAuth)
-    val analyticsRepository: AnalyticsRepository = AnalyticsRepositoryImpl(db, firestore)
+    val analyticsRepository: AnalyticsRepository =
+        AnalyticsRepositoryImpl(db, firestore, sessionStore, firebaseAuth)
 
     /**
      * Startup housekeeping for the local data: forget a session that may not be restored,
@@ -920,46 +926,88 @@ private class MarksRepositoryImpl(
 private class AnalyticsRepositoryImpl(
     private val db: SchoolDatabase,
     private val firestore: FirebaseFirestore?,
+    private val sessionStore: SessionStore,
+    private val auth: FirebaseAuth?,
 ) : AnalyticsRepository {
 
-    override suspend fun getStudentTrend(studentId: String): List<ResultSnapshot> {
+    override suspend fun getStudentTrend(studentId: String): StudentTrend {
         return withContext(Dispatchers.IO) {
-            val local = db.resultSnapshotDao().getStudentTrend(studentId)
-            if (local.isNotEmpty()) {
-                return@withContext local.map { it.toDomain(it.subjectPercentagesJson.toSubjectMap()) }
-            }
-
-            val remoteStore = firestore ?: return@withContext emptyList()
-            val remote = runCatching {
-                remoteStore.collectionGroup("resultSnapshots")
-                    .whereEqualTo("studentId", studentId)
-                    .get()
-                    .await()
-                    .documents
-            }.getOrDefault(emptyList())
-
-            remote.mapNotNull { doc ->
-                val map = (doc.get("subjectPercentages") as? Map<*, *>)
-                    ?.entries
-                    ?.filter { it.key is String && it.value is Number }
-                    ?.associate { it.key as String to (it.value as Number).toDouble() }
-                    .orEmpty()
-
-                val snapshot = ResultSnapshot(
-                    snapshotId = doc.id,
-                    cycleId = doc.getString("cycleId") ?: return@mapNotNull null,
-                    sectionId = doc.getString("sectionId") ?: return@mapNotNull null,
-                    studentId = doc.getString("studentId") ?: return@mapNotNull null,
-                    subjectPercentages = map,
-                    overallPercentage = doc.getDouble("overallPercentage"),
-                    passStatus = PassStatus.valueOf(doc.getString("passStatus") ?: PassStatus.INCOMPLETE.name),
-                    riskLevel = RiskLevel.valueOf(doc.getString("riskLevel") ?: RiskLevel.HIGH.name),
+            // Checked with the server every time a real account that owns the local data is
+            // signed in (the same rule as uploads); demo data and builds without Firebase only
+            // have the local copy.
+            val remoteStore = firestore
+            val sessionUid = sessionStore.getUserId()
+            val schoolId = uploadSchoolIdOrNull(db, sessionStore, auth)
+            if (remoteStore != null && schoolId != null) {
+                val server = fetchServerResults(remoteStore, schoolId, studentId)
+                val plan = ResultSync.reconcile(
+                    studentId = studentId,
+                    localIds = db.resultSnapshotDao().getStudentTrend(studentId).map { it.snapshotId },
+                    server = server,
                 )
-                db.resultSnapshotDao().upsert(snapshot.toEntity(snapshot.subjectPercentages.toJsonString()))
-                snapshot
-            }.sortedBy { it.cycleId }
+                // Never write into the local data of an account that signed in meanwhile.
+                if (sessionStore.getUserId() == sessionUid) {
+                    db.withTransaction {
+                        plan.upserts.forEach {
+                            db.resultSnapshotDao().upsert(it.toEntity(it.subjectPercentages.toJsonString()))
+                        }
+                        if (plan.deleteIds.isNotEmpty()) {
+                            db.resultSnapshotDao().deleteByIds(plan.deleteIds)
+                        }
+                    }
+                }
+                return@withContext StudentTrend(cachedTrend(studentId), serverUnreachable = plan.serverUnreachable)
+            }
+            StudentTrend(cachedTrend(studentId), serverUnreachable = false)
         }
     }
+
+    private suspend fun cachedTrend(studentId: String): List<ResultSnapshot> =
+        db.resultSnapshotDao().getStudentTrend(studentId).map { it.toDomain(it.subjectPercentagesJson.toSubjectMap()) }
+
+    /** The student's results in their school, from the server only; null if it could not be asked. */
+    private suspend fun fetchServerResults(
+        remoteStore: FirebaseFirestore,
+        schoolId: String,
+        studentId: String,
+    ): ResultSync.ServerResults? {
+        val docs = try {
+            remoteStore.collection("schools")
+                .document(schoolId)
+                .collection("resultSnapshots")
+                .whereEqualTo("studentId", studentId)
+                // Not the offline cache: an empty or partial cache must not look like "no results".
+                .get(Source.SERVER)
+                .await()
+                .documents
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return null
+        }
+        return ResultSync.ServerResults(
+            docIds = docs.map { it.id },
+            readable = docs.mapNotNull { it.toResultSnapshotOrNull() },
+        )
+    }
+
+    private fun DocumentSnapshot.toResultSnapshotOrNull(): ResultSnapshot? = runCatching {
+        val map = (get("subjectPercentages") as? Map<*, *>)
+            ?.entries
+            ?.filter { it.key is String && it.value is Number }
+            ?.associate { it.key as String to (it.value as Number).toDouble() }
+            .orEmpty()
+        ResultSnapshot(
+            snapshotId = id,
+            cycleId = getString("cycleId") ?: return null,
+            sectionId = getString("sectionId") ?: return null,
+            studentId = getString("studentId") ?: return null,
+            subjectPercentages = map,
+            overallPercentage = getDouble("overallPercentage"),
+            passStatus = PassStatus.valueOf(getString("passStatus") ?: PassStatus.INCOMPLETE.name),
+            riskLevel = RiskLevel.valueOf(getString("riskLevel") ?: RiskLevel.HIGH.name),
+        )
+    }.getOrNull()
 
     override suspend fun getSectionSummary(cycleId: String, sectionId: String): SectionSummary {
         return withContext(Dispatchers.IO) {
