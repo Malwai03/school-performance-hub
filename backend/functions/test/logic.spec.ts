@@ -1,6 +1,21 @@
 import { __testables } from "../src/index";
 
 describe("grading logic", () => {
+  test.each([false, true])("rejects duplicate assessment scores regardless of input order (reversed=%s)", (reversed) => {
+    const duplicates = [
+      { scoreId: "a_correction", assessmentId: "m1", studentId: "st1", obtainedMarks: 10, status: "PRESENT" as const },
+      { scoreId: "z_old", assessmentId: "m1", studentId: "st1", obtainedMarks: 90, status: "PRESENT" as const },
+    ];
+    if (reversed) duplicates.reverse();
+
+    expect(() => __testables.computeResult(
+      [{ subjectId: "math", mandatory: true }],
+      [{ assessmentId: "m1", cycleId: "c1", sectionId: "s1", subjectId: "math", maxMarks: 100 }],
+      duplicates,
+      null,
+    )).toThrow("Duplicate scores for assessment m1");
+  });
+
   test("marks incomplete when required score missing", () => {
     const result = __testables.computeResult(
       [{ subjectId: "math", mandatory: true, passThresholdPct: 33 }],

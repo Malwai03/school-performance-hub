@@ -148,6 +148,9 @@ function computeResult(
 ): ResultPayload {
   const scoreByAssessment = new Map<string, ScoreDoc>();
   for (const score of scores) {
+    if (scoreByAssessment.has(score.assessmentId)) {
+      throw new HttpsError("failed-precondition", `Duplicate scores for assessment ${score.assessmentId}; resolve the conflicting documents before computing results`);
+    }
     scoreByAssessment.set(score.assessmentId, score);
   }
 
@@ -651,6 +654,10 @@ async function computeAndPersistSectionResults(
 }
 
 async function notifySectionPublish(schoolId: string, sectionId: string, cycleId: string): Promise<void> {
+  const schoolRef = db.collection("schools").doc(schoolId);
+  const summaryRef = schoolRef.collection("sectionAnalytics").doc(`${cycleId}_${sectionId}`);
+  const notificationRef = schoolRef.collection("publicationNotifications").doc(`${cycleId}_${sectionId}`);
+
   const usersSnap = await db
     .collection("schools")
     .doc(schoolId)
@@ -659,34 +666,61 @@ async function notifySectionPublish(schoolId: string, sectionId: string, cycleId
     .where("sectionId", "==", sectionId)
     .get();
 
-  const tokens: string[] = [];
+  const tokens = new Set<string>();
   usersSnap.docs.forEach((doc) => {
     const userTokens = doc.get("fcmTokens");
     if (Array.isArray(userTokens)) {
       userTokens.forEach((t) => {
-        if (typeof t === "string" && t.length > 0) tokens.push(t);
+        if (typeof t === "string" && t.length > 0) tokens.add(t);
       });
     }
   });
 
-  if (!tokens.length) {
+  if (!tokens.size) {
     return;
   }
 
-  for (let i = 0; i < tokens.length; i += 500) {
-    const chunk = tokens.slice(i, i + 500);
-    await getMessaging().sendEachForMulticast({
-      tokens: chunk,
-      notification: {
-        title: "New Result Published",
-        body: `Your ${cycleId} evaluation is now available.`,
-      },
-      data: {
-        schoolId,
-        sectionId,
-        cycleId,
-      },
+  const claimed = await db.runTransaction(async (transaction) => {
+    const summary = await transaction.get(summaryRef);
+    const notification = await transaction.get(notificationRef);
+    if (notification.exists || !summary.exists || summary.get("incompleteCount") !== 0 ||
+        !(summary.get("passCount") + summary.get("failCount") > 0)) {
+      return false;
+    }
+    // Claim before contacting FCM so concurrent publishes and retries cannot resend.
+    // Interrupted/failed attempts require review: FCM has no idempotency key.
+    transaction.set(notificationRef, {
+      schoolId, sectionId, cycleId,
+      status: "SENDING",
+      createdAt: FieldValue.serverTimestamp(),
     });
+    return true;
+  });
+  if (!claimed) return;
+
+  try {
+    const distinctTokens = Array.from(tokens);
+    let failureCount = 0;
+    for (let i = 0; i < distinctTokens.length; i += 500) {
+      const chunk = distinctTokens.slice(i, i + 500);
+      const response = await getMessaging().sendEachForMulticast({
+        tokens: chunk,
+        notification: {
+          title: "New Result Published",
+          body: `Your ${cycleId} evaluation is now available.`,
+        },
+        data: { schoolId, sectionId, cycleId },
+      });
+      failureCount += response.failureCount;
+    }
+    await notificationRef.set({
+      status: failureCount ? "FAILED" : "SENT",
+      failureCount,
+      completedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (error) {
+    await notificationRef.set({ status: "FAILED", completedAt: FieldValue.serverTimestamp() }, { merge: true });
+    throw error;
   }
 }
 
@@ -826,7 +860,7 @@ export const onPublishRecomputeAnalytics = onDocumentUpdated(
 
     for (const sectionId of sectionIds) {
       await computeAndPersistSectionResults(schoolId, cycleId, sectionId);
-      await notifySectionPublish(schoolId, sectionId, cycleId);
+      // Only the section explicitly selected by publishCycleResults owns its notification.
     }
   },
 );
@@ -835,4 +869,5 @@ export const __testables = {
   computeSubjectPercentage,
   computeResult,
   deriveRisk,
+  notifySectionPublish,
 };
