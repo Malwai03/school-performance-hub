@@ -69,6 +69,14 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function normalizeAssessmentWeight(value: unknown): number {
+  const weight = Number(value ?? 1);
+  if (!Number.isFinite(weight)) {
+    throw new HttpsError("failed-precondition", "Assessment weight must be finite");
+  }
+  return Math.max(weight, 0);
+}
+
 function hiddenEmailFromCode(loginCode: string): string {
   return `${loginCode.trim().toLowerCase()}@schoolapp.local`;
 }
@@ -116,7 +124,7 @@ function computeSubjectPercentage(assessments: AssessmentDoc[], scoreByAssessmen
     }
 
     const pct = (marks / assessment.maxMarks) * 100;
-    const weight = Math.max(assessment.weight ?? 1, 0);
+    const weight = normalizeAssessmentWeight(assessment.weight);
     weightedTotal += pct * weight;
     weightTotal += weight;
   }
@@ -465,23 +473,38 @@ async function fetchAssessments(schoolId: string, cycleId: string, sectionId: st
     sectionId: String(doc.get("sectionId") || sectionId),
     subjectId: String(doc.get("subjectId") || ""),
     maxMarks: Number(doc.get("maxMarks") || 0),
-    weight: Number(doc.get("weight") || 1),
+    weight: normalizeAssessmentWeight(doc.get("weight")),
   }));
 }
 
-async function fetchSubjects(schoolId: string, subjectIds: string[]): Promise<SubjectDoc[]> {
-  if (!subjectIds.length) return [];
-  const refs = subjectIds.map((id) =>
-    db.collection("schools").doc(schoolId).collection("subjects").doc(id),
-  );
+async function fetchSubjects(schoolId: string, sectionId: string, subjectIds: string[]): Promise<SubjectDoc[]> {
+  const schoolRef = db.collection("schools").doc(schoolId);
+  const section = await schoolRef.collection("sections").doc(sectionId).get();
+  const grade = section.get("grade");
+  if (!section.exists || !Number.isInteger(grade) || grade <= 0) {
+    throw new HttpsError("failed-precondition", "Section must have a valid grade to resolve required subjects");
+  }
+
+  // The grade curriculum is independent of which assessments have been created.
+  const subjectsRef = schoolRef.collection("subjects");
+  const roster = await subjectsRef.where("grade", "==", grade).get();
+  const expectedIds = Array.from(new Set([...roster.docs.map((doc) => doc.id), ...subjectIds]));
+  if (!expectedIds.length) return [];
+  if (expectedIds.some((id) => !id)) {
+    throw new HttpsError("failed-precondition", "Assessment must reference a subject");
+  }
+  const refs = expectedIds.map((id) => subjectsRef.doc(id));
   const docs = await db.getAll(...refs);
-  return docs
-    .filter((doc) => doc.exists)
-    .map((doc) => ({
+  return docs.map((doc) => {
+    if (!doc.exists) {
+      throw new HttpsError("failed-precondition", `Subject not found: ${doc.id}`);
+    }
+    return {
       subjectId: doc.id,
       passThresholdPct: Number(doc.get("passThresholdPct") || SUBJECT_DEFAULT_THRESHOLD),
       mandatory: Boolean(doc.get("mandatory") ?? true),
-    }));
+    };
+  });
 }
 
 async function fetchScoresForAssessments(schoolId: string, assessmentIds: string[]): Promise<ScoreDoc[]> {
@@ -511,21 +534,56 @@ async function fetchScoresForAssessments(schoolId: string, assessmentIds: string
   return result;
 }
 
+function academicStartDate(value: unknown): string | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const time = Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === value ? value : null;
+}
+
 async function getPreviousOverall(schoolId: string, studentId: string, cycleId: string): Promise<number | null> {
-  const snap = await db
-    .collection("schools")
-    .doc(schoolId)
+  const schoolRef = db.collection("schools").doc(schoolId);
+  const cyclesRef = schoolRef.collection("assessmentCycles");
+  const current = await cyclesRef.doc(cycleId).get();
+  // Academic order uses valid start dates, strictly earlier than the current cycle.
+  // Cycle IDs and creation times do not establish chronology.
+  const currentStart = academicStartDate(current.get("startDateIso"));
+  if (!currentStart) return null;
+
+  const snap = await schoolRef
     .collection("resultSnapshots")
     .where("studentId", "==", studentId)
-    .where("cycleId", "<", cycleId)
-    .orderBy("cycleId", "desc")
-    .limit(1)
     .get();
 
-  const doc = snap.docs[0];
-  if (!doc) return null;
-  const overall = doc.get("overallPercentage");
-  return typeof overall === "number" ? overall : null;
+  // Only complete results from published cycles can establish a baseline.
+  const candidates = snap.docs.filter((doc) => {
+    const status = doc.get("passStatus");
+    const overall = doc.get("overallPercentage");
+    return doc.get("cycleId") && doc.get("cycleId") !== cycleId
+      && (status === "PASS" || status === "FAIL")
+      && typeof overall === "number" && Number.isFinite(overall);
+  });
+  if (!candidates.length) return null;
+
+  const cycleIds = Array.from(new Set(candidates.map((doc) => String(doc.get("cycleId")))));
+  const cycles = await db.getAll(...cycleIds.map((id) => cyclesRef.doc(id)));
+  const earlierStarts = new Map<string, string>();
+  for (const cycle of cycles) {
+    const start = academicStartDate(cycle.get("startDateIso"));
+    if (cycle.exists && cycle.get("published") === true && start && start < currentStart) {
+      earlierStarts.set(cycle.id, start);
+    }
+  }
+
+  let previousStart = "";
+  let previousOverall: number | null = null;
+  for (const candidate of candidates) {
+    const start = earlierStarts.get(String(candidate.get("cycleId")));
+    if (start && start > previousStart) {
+      previousStart = start;
+      previousOverall = candidate.get("overallPercentage");
+    }
+  }
+  return previousOverall;
 }
 
 async function computeAndPersistStudentResult(
@@ -535,8 +593,8 @@ async function computeAndPersistStudentResult(
   studentId: string,
 ): Promise<ResultPayload> {
   const assessments = await fetchAssessments(schoolId, cycleId, sectionId);
-  const subjectIds = Array.from(new Set(assessments.map((a) => a.subjectId).filter(Boolean)));
-  const subjects = await fetchSubjects(schoolId, subjectIds);
+  const subjectIds = Array.from(new Set(assessments.map((a) => a.subjectId)));
+  const subjects = await fetchSubjects(schoolId, sectionId, subjectIds);
 
   const assessmentIds = assessments.map((a) => a.assessmentId);
   const scoreDocs = await fetchScoresForAssessments(schoolId, assessmentIds);
@@ -832,6 +890,9 @@ export const onPublishRecomputeAnalytics = onDocumentUpdated(
 );
 
 export const __testables = {
+  fetchAssessments,
+  getPreviousOverall,
+  computeAndPersistStudentResult,
   computeSubjectPercentage,
   computeResult,
   deriveRisk,
