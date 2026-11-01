@@ -9,6 +9,8 @@ import androidx.work.WorkerParameters
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.schoolapp.data.local.SchoolDatabase
+import com.schoolapp.data.repository.SessionStore
+import com.schoolapp.data.repository.storedSessionSchoolId
 import kotlinx.coroutines.tasks.await
 import java.util.concurrent.TimeUnit
 
@@ -22,11 +24,15 @@ class ScoreSyncWorker(
         val firestore = runCatching { FirebaseFirestore.getInstance() }.getOrNull()
             ?: return Result.success()
 
+        // Scores go to the signed-in user's school. Nobody signed in: leave them for a later run.
+        val schoolId = storedSessionSchoolId(db, SessionStore(applicationContext))
+            ?: return Result.success()
+
         return runCatching {
             val unsynced = db.scoreDao().getUnsynced()
             unsynced.forEach { score ->
                 firestore.collection("schools")
-                    .document("school_001")
+                    .document(schoolId)
                     .collection("scores")
                     .document(score.scoreId)
                     .set(

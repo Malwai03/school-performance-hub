@@ -28,6 +28,7 @@ import com.schoolapp.core.model.TeacherAssignment
 import com.schoolapp.core.model.UserRole
 import com.schoolapp.core.logic.GradingEngine
 import com.schoolapp.core.logic.GradingPolicy
+import com.schoolapp.core.logic.SchoolScope
 import com.schoolapp.core.logic.TrendPoint
 import com.schoolapp.data.local.toJsonString
 import com.schoolapp.data.local.toSubjectMap
@@ -43,8 +44,6 @@ import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import java.util.UUID
-
-private const val DEFAULT_SCHOOL_ID = "school_001"
 
 class AppContainer(context: Context) {
     private val db = SchoolDatabase.get(context)
@@ -64,7 +63,8 @@ class AppContainer(context: Context) {
         withContext(Dispatchers.IO) {
             if (db.studentDao().countAll() > 0) return@withContext
 
-            val schoolId = DEFAULT_SCHOOL_ID
+            // Demo/seed data lives in the default school; demo logins are cached with it.
+            val schoolId = SchoolScope.DEFAULT_SCHOOL_ID
             db.userDao().upsert(
                 SchoolUser("admin-1", schoolId, UserRole.ADMIN, "Principal Admin", "admin001", true).toEntity(),
             )
@@ -160,18 +160,24 @@ private class AuthRepositoryImpl(
 
             val email = "${loginCode.lowercase()}@schoolapp.local"
             val authResult = firebaseAuth.signInWithEmailAndPassword(email, password).await()
-            val uid = authResult.user?.uid ?: error("Authentication failed")
+            val firebaseUser = authResult.user ?: error("Authentication failed")
+            val uid = firebaseUser.uid
+
+            // The token's schoolId claim says which school this account belongs to.
+            val claims = firebaseUser.getIdToken(false).await().claims
+            val schoolId = SchoolScope.schoolIdForSignIn(claims)
 
             val profile = firebaseStore.collection("schools")
-                .document(DEFAULT_SCHOOL_ID)
+                .document(schoolId)
                 .collection("users")
                 .document(uid)
                 .get()
                 .await()
+            check(profile.exists()) { "No profile found for this account in its school" }
 
             val user = SchoolUser(
                 uid = uid,
-                schoolId = profile.getString("schoolId") ?: DEFAULT_SCHOOL_ID,
+                schoolId = schoolId,
                 role = UserRole.valueOf(profile.getString("role") ?: UserRole.TEACHER.name),
                 displayName = profile.getString("displayName") ?: "User",
                 code = profile.getString("code") ?: loginCode,
@@ -297,10 +303,8 @@ private class AuthRepositoryImpl(
         }
     }
 
-    private suspend fun currentSchoolId(): String {
-        val uid = sessionStore.getUserId()
-        return uid?.let { db.userDao().getByUid(it)?.schoolId } ?: DEFAULT_SCHOOL_ID
-    }
+    private suspend fun currentSchoolId(): String =
+        SchoolScope.requireSessionSchoolId(storedSessionSchoolId(db, sessionStore))
 }
 
 private class MasterDataRepositoryImpl(
@@ -512,14 +516,8 @@ private class MasterDataRepositoryImpl(
         }
     }
 
-    private suspend fun currentSchoolId(): String {
-        val uid = sessionStore.getUserId()
-        if (uid != null) {
-            val user = db.userDao().getByUid(uid)
-            if (user != null) return user.schoolId
-        }
-        return DEFAULT_SCHOOL_ID
-    }
+    private suspend fun currentSchoolId(): String =
+        SchoolScope.requireSessionSchoolId(storedSessionSchoolId(db, sessionStore))
 }
 
 private class MarksRepositoryImpl(
@@ -738,14 +736,8 @@ private class MarksRepositoryImpl(
         }
     }
 
-    private suspend fun currentSchoolId(): String {
-        val uid = sessionStore.getUserId()
-        if (uid != null) {
-            val user = db.userDao().getByUid(uid)
-            if (user != null) return user.schoolId
-        }
-        return DEFAULT_SCHOOL_ID
-    }
+    private suspend fun currentSchoolId(): String =
+        SchoolScope.requireSessionSchoolId(storedSessionSchoolId(db, sessionStore))
 }
 
 private class AnalyticsRepositoryImpl(
