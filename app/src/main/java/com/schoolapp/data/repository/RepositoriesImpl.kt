@@ -572,24 +572,11 @@ private class MarksRepositoryImpl(
             // Uploaded only as the account that owns the local marks; otherwise it stays
             // unsynced for that account (sync worker, or the final upload at sign-out).
             val schoolId = uploadSchoolIdOrNull(db, sessionStore, auth) ?: return@withContext
-            runCatching {
-                val remote = firestore
-                remote.collection("schools")
-                    .document(schoolId)
-                    .collection("scores")
-                    .document(canonicalId)
-                    .set(
-                        mapOf(
-                            "scoreId" to canonicalScore.scoreId,
-                            "assessmentId" to canonicalScore.assessmentId,
-                            "studentId" to canonicalScore.studentId,
-                            "obtainedMarks" to canonicalScore.obtainedMarks,
-                            "status" to canonicalScore.status.name,
-                        ),
-                    )
-                    .await()
-                db.scoreDao().markSynced(canonicalId)
-            }
+            val uid = sessionStore.getUserId() ?: return@withContext
+            // Same ordered pipeline as the sync worker: it uploads whatever this score holds when
+            // its turn comes and only marks that version synced. If the server does not take it,
+            // it stays unsynced for the worker (or the final upload at sign-out).
+            ScoreUploader.uploadOne(db, firestore, schoolId, canonicalId) { auth?.currentUser?.uid == uid }
         }
     }
 

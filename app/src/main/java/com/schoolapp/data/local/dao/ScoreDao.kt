@@ -37,4 +37,26 @@ interface ScoreDao {
 
     @Query("UPDATE scores SET synced = 1 WHERE scoreId = :scoreId")
     suspend fun markSynced(scoreId: String)
+
+    @Query("SELECT * FROM scores WHERE scoreId = :scoreId LIMIT 1")
+    suspend fun getById(scoreId: String): ScoreEntity?
+
+    /**
+     * Acknowledges an upload only if the row still holds the uploaded version. Returns the number
+     * of rows updated: 0 means the score was edited or deleted while it was being uploaded.
+     */
+    @Query(
+        """
+        UPDATE scores SET synced = 1
+        WHERE scoreId = :scoreId AND synced = 0 AND assessmentId = :assessmentId
+            AND studentId = :studentId AND obtainedMarks = :obtainedMarks AND status = :status
+        """,
+    )
+    suspend fun markSyncedIfUnchanged(
+        scoreId: String,
+        assessmentId: String,
+        studentId: String,
+        obtainedMarks: Double,
+        status: String,
+    ): Int
 }
