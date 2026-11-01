@@ -23,6 +23,9 @@ interface AssessmentDao {
     @Query("SELECT * FROM assessments WHERE assessmentId = :assessmentId LIMIT 1")
     suspend fun getById(assessmentId: String): AssessmentEntity?
 
+    @Query("DELETE FROM assessments WHERE assessmentId = :assessmentId")
+    suspend fun deleteById(assessmentId: String)
+
     @Query("DELETE FROM assessments WHERE sectionId = :sectionId")
     suspend fun deleteBySection(sectionId: String)
 

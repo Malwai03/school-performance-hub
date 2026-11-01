@@ -2,6 +2,7 @@ package com.schoolapp.data.repository
 
 import android.content.Context
 import android.net.Uri
+import androidx.room.withTransaction
 import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -31,6 +32,7 @@ import com.schoolapp.core.logic.DemoLogin
 import com.schoolapp.core.logic.GradingEngine
 import com.schoolapp.core.logic.GradingPolicy
 import com.schoolapp.core.logic.LocalDataPolicy
+import com.schoolapp.core.logic.LocalFirstChange
 import com.schoolapp.core.logic.SchoolScope
 import com.schoolapp.core.logic.TeacherScope
 import com.schoolapp.core.logic.UnsyncedMarksChoice
@@ -38,6 +40,13 @@ import com.schoolapp.core.logic.TrendPoint
 import com.schoolapp.data.local.toJsonString
 import com.schoolapp.data.local.toSubjectMap
 import com.schoolapp.data.local.SchoolDatabase
+import com.schoolapp.data.local.entity.AssessmentEntity
+import com.schoolapp.data.local.entity.ResultSnapshotEntity
+import com.schoolapp.data.local.entity.ScoreEntity
+import com.schoolapp.data.local.entity.SectionEntity
+import com.schoolapp.data.local.entity.StudentEntity
+import com.schoolapp.data.local.entity.SubjectEntity
+import com.schoolapp.data.local.entity.TeacherAssignmentEntity
 import com.schoolapp.data.local.entity.toDomain
 import com.schoolapp.data.local.entity.toEntity
 import com.schoolapp.domain.repository.AnalyticsRepository
@@ -341,82 +350,141 @@ private class MasterDataRepositoryImpl(
     private val auth: FirebaseAuth?,
 ) : MasterDataRepository {
 
+    // Every change below is made locally first, then uploaded. If the server refuses it, the
+    // local change is undone and the error reaches the caller (LocalFirstChange), so a refused
+    // change is never reported as done and never lingers only on this device.
+
     override suspend fun upsertSection(section: GradeSection) {
         withContext(Dispatchers.IO) {
-            db.sectionDao().upsert(section.toEntity())
-            syncDoc("sections", section.sectionId, mapOf(
-                "sectionId" to section.sectionId,
-                "schoolId" to section.schoolId,
-                "grade" to section.grade,
-                "sectionName" to section.sectionName,
-            ))
+            val previous = db.sectionDao().getById(section.sectionId)
+            LocalFirstChange.run(
+                apply = { db.sectionDao().upsert(section.toEntity()) },
+                upload = {
+                    syncDoc("sections", section.sectionId, mapOf(
+                        "sectionId" to section.sectionId,
+                        "schoolId" to section.schoolId,
+                        "grade" to section.grade,
+                        "sectionName" to section.sectionName,
+                    ))
+                },
+                undo = {
+                    if (previous != null) db.sectionDao().upsert(previous) else db.sectionDao().deleteById(section.sectionId)
+                },
+            )
         }
     }
 
     override suspend fun upsertSubject(subject: Subject) {
         withContext(Dispatchers.IO) {
-            db.subjectDao().upsert(subject.toEntity())
-            syncDoc("subjects", subject.subjectId, mapOf(
-                "subjectId" to subject.subjectId,
-                "schoolId" to subject.schoolId,
-                "grade" to subject.grade,
-                "name" to subject.name,
-                "passThresholdPct" to subject.passThresholdPct,
-                "mandatory" to subject.mandatory,
-            ))
+            val previous = db.subjectDao().getById(subject.subjectId)
+            LocalFirstChange.run(
+                apply = { db.subjectDao().upsert(subject.toEntity()) },
+                upload = {
+                    syncDoc("subjects", subject.subjectId, mapOf(
+                        "subjectId" to subject.subjectId,
+                        "schoolId" to subject.schoolId,
+                        "grade" to subject.grade,
+                        "name" to subject.name,
+                        "passThresholdPct" to subject.passThresholdPct,
+                        "mandatory" to subject.mandatory,
+                    ))
+                },
+                undo = {
+                    if (previous != null) db.subjectDao().upsert(previous) else db.subjectDao().deleteById(subject.subjectId)
+                },
+            )
         }
     }
 
     override suspend fun upsertStudent(student: Student) {
         withContext(Dispatchers.IO) {
-            db.studentDao().upsert(student.toEntity())
-            syncDoc("students", student.studentId, mapOf(
-                "studentId" to student.studentId,
-                "schoolId" to student.schoolId,
-                "sectionId" to student.sectionId,
-                "rollNumber" to student.rollNumber,
-                "fullName" to student.fullName,
-                "active" to student.active,
-            ))
+            val previous = db.studentDao().getById(student.studentId)
+            LocalFirstChange.run(
+                apply = { db.studentDao().upsert(student.toEntity()) },
+                upload = {
+                    syncDoc("students", student.studentId, mapOf(
+                        "studentId" to student.studentId,
+                        "schoolId" to student.schoolId,
+                        "sectionId" to student.sectionId,
+                        "rollNumber" to student.rollNumber,
+                        "fullName" to student.fullName,
+                        "active" to student.active,
+                    ))
+                },
+                undo = {
+                    if (previous != null) db.studentDao().upsert(previous) else db.studentDao().deleteById(student.studentId)
+                },
+            )
         }
     }
 
     override suspend fun deleteSection(sectionId: String) {
         withContext(Dispatchers.IO) {
-            val section = db.sectionDao().getAll().firstOrNull { it.sectionId == sectionId } ?: return@withContext
+            val section = db.sectionDao().getById(sectionId) ?: return@withContext
             val assessments = db.assessmentDao().getBySection(sectionId)
             val assessmentIds = assessments.map { it.assessmentId }
             val students = db.studentDao().getBySectionAll(sectionId)
+            // Everything the delete removes locally, to put back if the server refuses it.
+            val scores = (assessmentIds.flatMap { db.scoreDao().getByAssessment(it) } +
+                students.flatMap { db.scoreDao().getByStudent(it.studentId) }).distinctBy { it.scoreId }
+            val snapshots = (db.resultSnapshotDao().getBySection(sectionId) +
+                students.flatMap { db.resultSnapshotDao().getStudentTrend(it.studentId) }).distinctBy { it.snapshotId }
+            val assignments = db.teacherAssignmentDao().getBySection(sectionId)
 
-            if (assessmentIds.isNotEmpty()) {
-                db.scoreDao().deleteByAssessmentIds(assessmentIds)
-            }
-            students.forEach { student ->
-                db.scoreDao().deleteByStudent(student.studentId)
-                db.resultSnapshotDao().deleteByStudent(student.studentId)
-                db.studentDao().deleteById(student.studentId)
-                deleteDoc("students", student.studentId)
-            }
-
-            db.resultSnapshotDao().deleteBySection(sectionId)
-            db.assessmentDao().deleteBySection(sectionId)
-            db.teacherAssignmentDao().deleteBySection(sectionId)
-            db.sectionDao().deleteById(sectionId)
-
-            assessments.forEach { assessment ->
-                deleteDoc("assessments", assessment.assessmentId)
-            }
-            deleteDoc("sections", section.sectionId)
+            LocalFirstChange.run(
+                apply = {
+                    db.withTransaction {
+                        if (assessmentIds.isNotEmpty()) {
+                            db.scoreDao().deleteByAssessmentIds(assessmentIds)
+                        }
+                        students.forEach { student ->
+                            db.scoreDao().deleteByStudent(student.studentId)
+                            db.resultSnapshotDao().deleteByStudent(student.studentId)
+                            db.studentDao().deleteById(student.studentId)
+                        }
+                        db.resultSnapshotDao().deleteBySection(sectionId)
+                        db.assessmentDao().deleteBySection(sectionId)
+                        db.teacherAssignmentDao().deleteBySection(sectionId)
+                        db.sectionDao().deleteById(sectionId)
+                    }
+                },
+                upload = {
+                    deleteDocs(
+                        students.map { "students" to it.studentId } +
+                            assessments.map { "assessments" to it.assessmentId } +
+                            ("sections" to section.sectionId),
+                    )
+                },
+                undo = {
+                    restore(
+                        sections = listOf(section),
+                        students = students,
+                        assessments = assessments,
+                        scores = scores,
+                        snapshots = snapshots,
+                        assignments = assignments,
+                    )
+                },
+            )
         }
     }
 
     override suspend fun deleteStudent(studentId: String) {
         withContext(Dispatchers.IO) {
             val student = db.studentDao().getById(studentId) ?: return@withContext
-            db.scoreDao().deleteByStudent(studentId)
-            db.resultSnapshotDao().deleteByStudent(studentId)
-            db.studentDao().deleteById(studentId)
-            deleteDoc("students", student.studentId)
+            val scores = db.scoreDao().getByStudent(studentId)
+            val snapshots = db.resultSnapshotDao().getStudentTrend(studentId)
+            LocalFirstChange.run(
+                apply = {
+                    db.withTransaction {
+                        db.scoreDao().deleteByStudent(studentId)
+                        db.resultSnapshotDao().deleteByStudent(studentId)
+                        db.studentDao().deleteById(studentId)
+                    }
+                },
+                upload = { deleteDocs(listOf("students" to student.studentId)) },
+                undo = { restore(students = listOf(student), scores = scores, snapshots = snapshots) },
+            )
         }
     }
 
@@ -425,44 +493,71 @@ private class MasterDataRepositoryImpl(
             val subject = db.subjectDao().getById(subjectId) ?: return@withContext
             val assessments = db.assessmentDao().getBySubject(subjectId)
             val assessmentIds = assessments.map { it.assessmentId }
-            if (assessmentIds.isNotEmpty()) {
-                db.scoreDao().deleteByAssessmentIds(assessmentIds)
-            }
-            db.assessmentDao().deleteBySubject(subjectId)
-            db.teacherAssignmentDao().deleteBySubject(subjectId)
-            db.subjectDao().deleteById(subjectId)
-
-            assessments.forEach { assessment -> deleteDoc("assessments", assessment.assessmentId) }
-            deleteDoc("subjects", subject.subjectId)
+            val scores = assessmentIds.flatMap { db.scoreDao().getByAssessment(it) }
+            val assignments = db.teacherAssignmentDao().getBySubject(subjectId)
+            LocalFirstChange.run(
+                apply = {
+                    db.withTransaction {
+                        if (assessmentIds.isNotEmpty()) {
+                            db.scoreDao().deleteByAssessmentIds(assessmentIds)
+                        }
+                        db.assessmentDao().deleteBySubject(subjectId)
+                        db.teacherAssignmentDao().deleteBySubject(subjectId)
+                        db.subjectDao().deleteById(subjectId)
+                    }
+                },
+                upload = {
+                    deleteDocs(assessments.map { "assessments" to it.assessmentId } + ("subjects" to subject.subjectId))
+                },
+                undo = {
+                    restore(subjects = listOf(subject), assessments = assessments, scores = scores, assignments = assignments)
+                },
+            )
         }
     }
 
     override suspend fun upsertAssessmentCycle(cycle: AssessmentCycle) {
         withContext(Dispatchers.IO) {
-            db.assessmentCycleDao().upsert(cycle.toEntity())
-            syncDoc("assessmentCycles", cycle.cycleId, mapOf(
-                "cycleId" to cycle.cycleId,
-                "schoolId" to cycle.schoolId,
-                "name" to cycle.name,
-                "startDateIso" to cycle.startDateIso,
-                "endDateIso" to cycle.endDateIso,
-                "published" to cycle.published,
-            ))
+            val previous = db.assessmentCycleDao().getById(cycle.cycleId)
+            LocalFirstChange.run(
+                apply = { db.assessmentCycleDao().upsert(cycle.toEntity()) },
+                upload = {
+                    syncDoc("assessmentCycles", cycle.cycleId, mapOf(
+                        "cycleId" to cycle.cycleId,
+                        "schoolId" to cycle.schoolId,
+                        "name" to cycle.name,
+                        "startDateIso" to cycle.startDateIso,
+                        "endDateIso" to cycle.endDateIso,
+                        "published" to cycle.published,
+                    ))
+                },
+                undo = {
+                    if (previous != null) db.assessmentCycleDao().upsert(previous) else db.assessmentCycleDao().deleteById(cycle.cycleId)
+                },
+            )
         }
     }
 
     override suspend fun upsertAssessment(assessment: Assessment) {
         withContext(Dispatchers.IO) {
-            db.assessmentDao().upsert(assessment.toEntity())
-            syncDoc("assessments", assessment.assessmentId, mapOf(
-                "assessmentId" to assessment.assessmentId,
-                "cycleId" to assessment.cycleId,
-                "sectionId" to assessment.sectionId,
-                "subjectId" to assessment.subjectId,
-                "title" to assessment.title,
-                "maxMarks" to assessment.maxMarks,
-                "weight" to assessment.weight,
-            ))
+            val previous = db.assessmentDao().getById(assessment.assessmentId)
+            LocalFirstChange.run(
+                apply = { db.assessmentDao().upsert(assessment.toEntity()) },
+                upload = {
+                    syncDoc("assessments", assessment.assessmentId, mapOf(
+                        "assessmentId" to assessment.assessmentId,
+                        "cycleId" to assessment.cycleId,
+                        "sectionId" to assessment.sectionId,
+                        "subjectId" to assessment.subjectId,
+                        "title" to assessment.title,
+                        "maxMarks" to assessment.maxMarks,
+                        "weight" to assessment.weight,
+                    ))
+                },
+                undo = {
+                    if (previous != null) db.assessmentDao().upsert(previous) else db.assessmentDao().deleteById(assessment.assessmentId)
+                },
+            )
         }
     }
 
@@ -476,14 +571,26 @@ private class MasterDataRepositoryImpl(
                 subjectId = subjectId,
                 teacherUid = teacherUid,
             )
-            db.teacherAssignmentDao().upsert(assignment.toEntity())
-            syncDoc("teacherAssignments", assignment.assignmentId, mapOf(
-                "assignmentId" to assignment.assignmentId,
-                "schoolId" to assignment.schoolId,
-                "sectionId" to assignment.sectionId,
-                "subjectId" to assignment.subjectId,
-                "teacherUid" to assignment.teacherUid,
-            ))
+            val previous = db.teacherAssignmentDao().getById(assignment.assignmentId)
+            LocalFirstChange.run(
+                apply = { db.teacherAssignmentDao().upsert(assignment.toEntity()) },
+                upload = {
+                    syncDoc("teacherAssignments", assignment.assignmentId, mapOf(
+                        "assignmentId" to assignment.assignmentId,
+                        "schoolId" to assignment.schoolId,
+                        "sectionId" to assignment.sectionId,
+                        "subjectId" to assignment.subjectId,
+                        "teacherUid" to assignment.teacherUid,
+                    ))
+                },
+                undo = {
+                    if (previous != null) {
+                        db.teacherAssignmentDao().upsert(previous)
+                    } else {
+                        db.teacherAssignmentDao().deleteById(assignment.assignmentId)
+                    }
+                },
+            )
         }
     }
 
@@ -524,35 +631,65 @@ private class MasterDataRepositoryImpl(
         }
     }
 
+    /**
+     * Uploads one document as the signed-in account that owns the local data. Returns without
+     * uploading when there is nothing to upload to (no Firebase, a demo session); throws if the
+     * server refuses the write.
+     */
     private suspend fun syncDoc(collection: String, id: String, payload: Map<String, Any>) {
-        runCatching {
-            val remote = firestore ?: return@runCatching
-            // Only as the signed-in account that owns the local data (never for demo data).
-            val schoolId = uploadSchoolIdOrNull(db, sessionStore, auth) ?: return@runCatching
-            remote.collection("schools")
-                .document(schoolId)
-                .collection(collection)
-                .document(id)
-                .set(payload)
-                .await()
+        val remote = firestore ?: return
+        // Only as the signed-in account that owns the local data (never for demo data).
+        val schoolId = uploadSchoolIdOrNull(db, sessionStore, auth) ?: return
+        remote.collection("schools")
+            .document(schoolId)
+            .collection(collection)
+            .document(id)
+            .set(payload)
+            .await()
+    }
+
+    /**
+     * Deletes these (collection, id) documents in one batch, so the server takes all of them or
+     * none. Firestore batches hold at most 500 writes; only a larger delete is split.
+     */
+    private suspend fun deleteDocs(docs: List<Pair<String, String>>) {
+        val remote = firestore ?: return
+        val schoolId = uploadSchoolIdOrNull(db, sessionStore, auth) ?: return
+        val school = remote.collection("schools").document(schoolId)
+        docs.chunked(MAX_BATCH_WRITES).forEach { chunk ->
+            val batch = remote.batch()
+            chunk.forEach { (collection, id) -> batch.delete(school.collection(collection).document(id)) }
+            batch.commit().await()
         }
     }
 
-    private suspend fun deleteDoc(collection: String, id: String) {
-        runCatching {
-            val remote = firestore ?: return@runCatching
-            val schoolId = uploadSchoolIdOrNull(db, sessionStore, auth) ?: return@runCatching
-            remote.collection("schools")
-                .document(schoolId)
-                .collection(collection)
-                .document(id)
-                .delete()
-                .await()
+    /** Puts back the rows a refused delete removed. */
+    private suspend fun restore(
+        sections: List<SectionEntity> = emptyList(),
+        subjects: List<SubjectEntity> = emptyList(),
+        students: List<StudentEntity> = emptyList(),
+        assessments: List<AssessmentEntity> = emptyList(),
+        scores: List<ScoreEntity> = emptyList(),
+        snapshots: List<ResultSnapshotEntity> = emptyList(),
+        assignments: List<TeacherAssignmentEntity> = emptyList(),
+    ) {
+        db.withTransaction {
+            sections.forEach { db.sectionDao().upsert(it) }
+            subjects.forEach { db.subjectDao().upsert(it) }
+            students.forEach { db.studentDao().upsert(it) }
+            assessments.forEach { db.assessmentDao().upsert(it) }
+            scores.forEach { db.scoreDao().upsert(it) }
+            snapshots.forEach { db.resultSnapshotDao().upsert(it) }
+            assignments.forEach { db.teacherAssignmentDao().upsert(it) }
         }
     }
 
     private suspend fun currentSchoolId(): String =
         SchoolScope.requireSessionSchoolId(storedSessionSchoolId(db, sessionStore))
+
+    private companion object {
+        const val MAX_BATCH_WRITES = 500
+    }
 }
 
 private class MarksRepositoryImpl(

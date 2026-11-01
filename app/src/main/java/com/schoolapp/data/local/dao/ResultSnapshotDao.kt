@@ -17,6 +17,9 @@ interface ResultSnapshotDao {
     @Query("SELECT * FROM result_snapshots WHERE sectionId = :sectionId AND cycleId = :cycleId")
     suspend fun getSectionResults(sectionId: String, cycleId: String): List<ResultSnapshotEntity>
 
+    @Query("SELECT * FROM result_snapshots WHERE sectionId = :sectionId")
+    suspend fun getBySection(sectionId: String): List<ResultSnapshotEntity>
+
     @Query("DELETE FROM result_snapshots WHERE studentId = :studentId")
     suspend fun deleteByStudent(studentId: String)
 

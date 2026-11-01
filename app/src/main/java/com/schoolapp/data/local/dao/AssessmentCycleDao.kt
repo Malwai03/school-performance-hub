@@ -16,4 +16,7 @@ interface AssessmentCycleDao {
 
     @Query("SELECT * FROM assessment_cycles WHERE cycleId = :cycleId LIMIT 1")
     suspend fun getById(cycleId: String): AssessmentCycleEntity?
+
+    @Query("DELETE FROM assessment_cycles WHERE cycleId = :cycleId")
+    suspend fun deleteById(cycleId: String)
 }

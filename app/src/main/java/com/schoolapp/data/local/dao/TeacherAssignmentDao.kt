@@ -17,6 +17,18 @@ interface TeacherAssignmentDao {
     @Query("SELECT * FROM teacher_assignments WHERE sectionId = :sectionId AND subjectId = :subjectId LIMIT 1")
     suspend fun getAssignment(sectionId: String, subjectId: String): TeacherAssignmentEntity?
 
+    @Query("SELECT * FROM teacher_assignments WHERE assignmentId = :assignmentId LIMIT 1")
+    suspend fun getById(assignmentId: String): TeacherAssignmentEntity?
+
+    @Query("SELECT * FROM teacher_assignments WHERE sectionId = :sectionId")
+    suspend fun getBySection(sectionId: String): List<TeacherAssignmentEntity>
+
+    @Query("SELECT * FROM teacher_assignments WHERE subjectId = :subjectId")
+    suspend fun getBySubject(subjectId: String): List<TeacherAssignmentEntity>
+
+    @Query("DELETE FROM teacher_assignments WHERE assignmentId = :assignmentId")
+    suspend fun deleteById(assignmentId: String)
+
     @Query("DELETE FROM teacher_assignments WHERE sectionId = :sectionId")
     suspend fun deleteBySection(sectionId: String)
 
