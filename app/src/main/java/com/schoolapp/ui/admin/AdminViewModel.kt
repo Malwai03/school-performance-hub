@@ -3,6 +3,7 @@
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.schoolapp.core.logic.SchoolScope
 import com.schoolapp.core.model.AcademicContext
 import com.schoolapp.core.model.AdminDestination
 import com.schoolapp.core.model.Assessment
@@ -1281,7 +1282,7 @@ class AdminViewModel(
                 require(startDate.isNotBlank() && endDate.isNotBlank()) { "Start and end dates are required" }
                 val isoRegex = Regex("\\d{4}-\\d{2}-\\d{2}")
                 require(startDate.matches(isoRegex) && endDate.matches(isoRegex)) { "Use YYYY-MM-DD format" }
-                val schoolId = _uiState.value.sections.firstOrNull()?.schoolId ?: "school_001"
+                val schoolId = signedInSchoolId()
                 masterDataRepository.upsertAssessmentCycle(
                     AssessmentCycle(
                         cycleId = "cycle_${System.currentTimeMillis()}",
@@ -1309,7 +1310,7 @@ class AdminViewModel(
                 require(sectionName.isNotBlank()) { "Section name is required" }
 
                 val normalized = sectionName.trim().uppercase()
-                val schoolId = _uiState.value.sections.firstOrNull()?.schoolId ?: "school_001"
+                val schoolId = signedInSchoolId()
                 val baseId = "g${grade}_${normalized.lowercase()}"
                 val id = if (_uiState.value.sections.any { it.sectionId == baseId }) {
                     "${baseId}_${System.currentTimeMillis()}"
@@ -1705,6 +1706,10 @@ class AdminViewModel(
             }
         }
     }
+
+    /** New records belong to the signed-in admin's school, never a hardcoded one. */
+    private suspend fun signedInSchoolId(): String =
+        SchoolScope.requireSessionSchoolId(authRepository.currentUser()?.schoolId)
 
     companion object {
         private fun displaySchoolName(schoolId: String?): String {
