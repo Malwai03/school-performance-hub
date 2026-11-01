@@ -69,6 +69,14 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+function normalizeAssessmentWeight(value: unknown): number {
+  const weight = Number(value ?? 1);
+  if (!Number.isFinite(weight)) {
+    throw new HttpsError("failed-precondition", "Assessment weight must be finite");
+  }
+  return Math.max(weight, 0);
+}
+
 function hiddenEmailFromCode(loginCode: string): string {
   return `${loginCode.trim().toLowerCase()}@schoolapp.local`;
 }
@@ -80,14 +88,6 @@ function generateTemporaryPassword(length = 10): string {
     output += alphabet[Math.floor(Math.random() * alphabet.length)];
   }
   return `${output}!`;
-}
-
-function normalizeAssessmentWeight(value: unknown): number {
-  const weight = Number(value ?? 1);
-  if (!Number.isFinite(weight)) {
-    throw new HttpsError("failed-precondition", "Assessment weight must be finite");
-  }
-  return Math.max(weight, 0);
 }
 
 function computeSubjectPercentage(assessments: AssessmentDoc[], scoreByAssessment: Map<string, ScoreDoc>): { percentage: number; complete: boolean } {
@@ -890,10 +890,10 @@ export const onPublishRecomputeAnalytics = onDocumentUpdated(
 );
 
 export const __testables = {
-  computeSubjectPercentage,
-  computeResult,
-  deriveRisk,
   fetchAssessments,
   getPreviousOverall,
   computeAndPersistStudentResult,
+  computeSubjectPercentage,
+  computeResult,
+  deriveRisk,
 };
