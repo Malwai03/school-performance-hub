@@ -3,6 +3,7 @@ package com.schoolapp.ui.teacher
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.schoolapp.core.logic.TeacherScope
 import com.schoolapp.core.model.Assessment
 import com.schoolapp.core.model.AssessmentCycle
 import com.schoolapp.core.model.GradeSection
@@ -10,6 +11,7 @@ import com.schoolapp.core.model.ScoreEntry
 import com.schoolapp.core.model.ScoreStatus
 import com.schoolapp.core.model.Student
 import com.schoolapp.core.model.Subject
+import com.schoolapp.domain.repository.AuthRepository
 import com.schoolapp.domain.repository.MarksRepository
 import com.schoolapp.domain.repository.MasterDataRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +40,7 @@ data class TeacherMarksState(
 )
 
 class TeacherViewModel(
+    private val authRepository: AuthRepository,
     private val masterDataRepository: MasterDataRepository,
     private val marksRepository: MarksRepository,
 ) : ViewModel() {
@@ -54,16 +57,23 @@ class TeacherViewModel(
             _uiState.value = _uiState.value.copy(loading = true, error = null)
             runCatching {
                 val previous = _uiState.value
-                val sections = masterDataRepository.getSections()
+                // Only the classes and subjects this teacher is assigned to, in their own school.
+                val user = authRepository.currentUser() ?: error("No session")
+                val own = TeacherScope.assignmentsOf(user, masterDataRepository.getTeacherAssignments(user.uid))
+                val sections = TeacherScope.visibleSections(masterDataRepository.getSections(), own)
                 val cycles = masterDataRepository.getCycles()
-                val selectedSection = previous.selectedSectionId ?: sections.firstOrNull()?.sectionId
+                val selectedSection = previous.selectedSectionId?.takeIf { sectionId ->
+                    sections.any { it.sectionId == sectionId }
+                } ?: sections.firstOrNull()?.sectionId
                 val selectedCycle = previous.selectedCycleId ?: cycles.firstOrNull()?.cycleId
-                val subjects = selectedSection?.let { masterDataRepository.getSubjectsBySection(it) }.orEmpty()
+                val subjects = selectedSection?.let {
+                    TeacherScope.visibleSubjects(it, masterDataRepository.getSubjectsBySection(it), own)
+                }.orEmpty()
                 val selectedSubject = previous.selectedSubjectId?.takeIf { subjectId ->
                     subjects.any { it.subjectId == subjectId }
                 } ?: subjects.firstOrNull()?.subjectId
                 val allAssessments = if (selectedSection != null && selectedCycle != null) {
-                    masterDataRepository.getAssessments(selectedSection, selectedCycle)
+                    TeacherScope.visibleAssessments(masterDataRepository.getAssessments(selectedSection, selectedCycle), own)
                 } else {
                     emptyList()
                 }
@@ -254,13 +264,14 @@ class TeacherViewModel(
 
     companion object {
         fun factory(
+            authRepository: AuthRepository,
             masterDataRepository: MasterDataRepository,
             marksRepository: MarksRepository,
         ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return TeacherViewModel(masterDataRepository, marksRepository) as T
+                    return TeacherViewModel(authRepository, masterDataRepository, marksRepository) as T
                 }
             }
     }

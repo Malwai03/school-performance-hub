@@ -1156,7 +1156,7 @@ class AdminViewModel(
                     }
                 }
 
-                val trend = analyticsRepository.getStudentTrend(student.studentId)
+                val trend = analyticsRepository.getStudentTrend(student.studentId).snapshots
                 val sectionAverage = if (selectedCycleId != null) {
                     runCatching {
                         analyticsRepository.getSectionSummary(selectedCycleId, student.sectionId).averagePct

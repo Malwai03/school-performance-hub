@@ -13,6 +13,7 @@ import com.schoolapp.core.model.ScoreEntry
 import com.schoolapp.core.model.SectionSummary
 import com.schoolapp.core.model.Student
 import com.schoolapp.core.model.Subject
+import com.schoolapp.core.model.TeacherAssignment
 import com.schoolapp.core.model.UserRole
 
 /**
@@ -82,6 +83,7 @@ interface MasterDataRepository {
     suspend fun getStudentsBySection(sectionId: String): List<Student>
     suspend fun getCycles(): List<AssessmentCycle>
     suspend fun getAssessments(sectionId: String, cycleId: String): List<Assessment>
+    suspend fun getTeacherAssignments(teacherUid: String): List<TeacherAssignment>
 }
 
 interface MarksRepository {
@@ -94,7 +96,19 @@ interface MarksRepository {
     suspend fun publishCycle(cycleId: String, sectionId: String)
 }
 
+/** A student's results as stored on this device, after checking them with the server when possible. */
+data class StudentTrend(
+    val snapshots: List<ResultSnapshot>,
+    /** The server could not be asked just now, so these may be out of date. */
+    val serverUnreachable: Boolean = false,
+)
+
 interface AnalyticsRepository {
-    suspend fun getStudentTrend(studentId: String): List<ResultSnapshot>
+    /**
+     * The student's results. With a real signed-in account they are checked with the server
+     * first (new, corrected and withdrawn results); otherwise, or when the server cannot be
+     * asked, the copy on this device is returned.
+     */
+    suspend fun getStudentTrend(studentId: String): StudentTrend
     suspend fun getSectionSummary(cycleId: String, sectionId: String): SectionSummary
 }

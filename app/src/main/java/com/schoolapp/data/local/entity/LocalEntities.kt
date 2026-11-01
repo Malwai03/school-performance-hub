@@ -164,3 +164,4 @@ fun ResultSnapshot.toEntity(subjectPercentagesJson: String) = ResultSnapshotEnti
 )
 
 fun TeacherAssignment.toEntity() = TeacherAssignmentEntity(assignmentId, schoolId, sectionId, subjectId, teacherUid)
+fun TeacherAssignmentEntity.toDomain() = TeacherAssignment(assignmentId, schoolId, sectionId, subjectId, teacherUid)

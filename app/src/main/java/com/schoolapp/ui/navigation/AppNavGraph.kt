@@ -114,6 +114,7 @@ fun SchoolNavGraph(
         composable(Routes.TeacherHome) {
             val teacherViewModel: TeacherViewModel = viewModel(
                 factory = TeacherViewModel.factory(
+                    appContainer.authRepository,
                     appContainer.masterDataRepository,
                     appContainer.marksRepository,
                 ),

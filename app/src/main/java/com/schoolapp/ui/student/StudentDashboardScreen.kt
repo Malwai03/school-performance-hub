@@ -118,6 +118,14 @@ private fun OverviewTab(state: StudentDashboardState, onLogout: () -> Unit) {
                 if (state.cycleName.isNotBlank()) {
                     Text(state.cycleName, style = MaterialTheme.typography.bodyMedium, color = TextSecondary)
                 }
+                if (state.resultsMayBeOutdated) {
+                    Text(
+                        "Couldn't check with the school server. These are the results saved on this " +
+                            "device and may be out of date.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = WarningAmber,
+                    )
+                }
             }
         }
 
