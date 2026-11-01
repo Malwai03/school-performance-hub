@@ -3,8 +3,9 @@ service firebase.storage {
   match /b/{bucket}/o {
     // Admin of this school only, same checks as the callables (schoolAuth.ts): ADMIN role claim,
     // a schoolId claim (if the token has one) that matches, and the Firestore membership record
-    // the Firestore rules use. The firestore.* lookup is a cross-service rule: on first deploy the
-    // CLI asks to grant Storage read access to Firestore.
+    // the Firestore rules use, which must not be deactivated (active == false; a missing field counts
+    // as active, as in requireAdminForSchool). The firestore.* lookup is a cross-service rule: on
+    // first deploy the CLI asks to grant Storage read access to Firestore.
     function memberPath(schoolId) {
       return /databases/(default)/documents/schools/$(schoolId)/users/$(request.auth.uid);
     }
@@ -14,7 +15,8 @@ service firebase.storage {
         && request.auth.token.role == "ADMIN"
         && (!("schoolId" in request.auth.token) || request.auth.token.schoolId == schoolId)
         && firestore.exists(memberPath(schoolId))
-        && firestore.get(memberPath(schoolId)).data.role == "ADMIN";
+        && firestore.get(memberPath(schoolId)).data.role == "ADMIN"
+        && firestore.get(memberPath(schoolId)).data.get("active", true) != false;
     }
 
     match /imports/{schoolId}/{allPaths=**} {
