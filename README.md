@@ -64,7 +64,7 @@ written to `backend/functions/rules-test-results.json` and uploaded by the
 The rules checks cover school user records, teacher assignments and score bounds,
 student ownership, published/unpublished result access, backend-only result
 writes, and Storage tenant/role boundaries. Students can read their own results
-only after the linked assessment cycle is published; staff can inspect drafts.
+only after the linked assessment cycle is published; admins can inspect drafts.
 Storage import access requires the ADMIN role, an ADMIN record in that school's
 `users` collection (the same membership the Firestore rules use), and, when the token
 has a `schoolId` claim, a matching one. These tests validate local emulator behavior;
@@ -77,6 +77,19 @@ section/subject assignment. Updates preserve `studentId`, `assessmentId`, and
 `scoreId`. Score IDs remain opaque, matching the Android sync contract; no new
 ID format is imposed. Admin deletion is still permitted. Existing invalid score
 records need separate administrator review before these rules are deployed.
+
+Teachers read only what their assignments cover: their own `teacherAssignments`
+(`teacherUid` == their uid), the `students` of sections they teach any subject in,
+the `assessments` of their section + subject pairs, and the `scores` of those
+assessments. They read no `resultSnapshots`. The rules take this scope from
+`users/{teacherUid}.assignmentSections` (assignment id -> section id), which the
+`onTeacherAssignmentWrite` function keeps in step with `teacherAssignments`, so a
+teacher's `in` queries cost no extra document reads per value. A teacher's
+assessments query has to pin `subjectId` as well as `sectionId`, and a scores
+query may name at most 8 assessment ids (each one costs the rules a document read).
+For assignments that existed before that function was deployed, run
+`npm run build && GOOGLE_CLOUD_PROJECT=<project> node scripts/rebuild-teacher-scopes.js`
+in `backend/functions` once, before deploying the rules.
 
 Deploy (from repo root):
 ```bash

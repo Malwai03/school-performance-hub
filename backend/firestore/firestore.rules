@@ -55,6 +55,35 @@ service cloud.firestore {
       );
     }
 
+    // A teacher's read scope, as onTeacherAssignmentWrite mirrors it onto their profile:
+    // assignmentSections maps each of their teacherAssignments ids (<sectionId>_<subjectId>_<uid>) to its
+    // section. Read rules check this map instead of calling exists() per document, so a list query with an
+    // "in" filter costs no extra document reads per value. Writes still check teacherAssignments directly.
+    function teacherAssignmentSections(schoolId) {
+      return userData(schoolId).get("assignmentSections", {});
+    }
+
+    function teachesSection(schoolId, sectionId) {
+      return isTeacher(schoolId) && sectionId is string && sectionId.size() > 0 &&
+        sectionId in teacherAssignmentSections(schoolId).values();
+    }
+
+    function teachesPair(schoolId, sectionId, subjectId) {
+      return isTeacher(schoolId) && sectionId is string && sectionId.size() > 0 &&
+        subjectId is string && subjectId.size() > 0 &&
+        teacherAssignmentDocId(sectionId, subjectId) in teacherAssignmentSections(schoolId);
+    }
+
+    // One document read per assessment: its section and subject.
+    function teachesAssessment(schoolId, assessmentId) {
+      return isTeacher(schoolId) && assessmentId is string && assessmentId.size() > 0 &&
+        teachesAssessmentPair(schoolId, assessmentDoc(schoolId, assessmentId));
+    }
+
+    function teachesAssessmentPair(schoolId, assessment) {
+      return assessment != null && teachesPair(schoolId, assessment.sectionId, assessment.subjectId);
+    }
+
     function hasValidScoreBounds(schoolId, assessmentId, marks) {
       let assessment = assessmentDoc(schoolId, assessmentId);
       return assessment != null && marks is number &&
@@ -99,13 +128,17 @@ service cloud.firestore {
         allow create, update, delete: if isAdmin(schoolId);
       }
 
+      // Teachers: students of a section they teach any subject in.
       match /students/{studentId} {
-        allow read: if isAdmin(schoolId) || isTeacher(schoolId) || isStudentSelf(schoolId, studentId);
+        allow read: if isAdmin(schoolId) || isStudentSelf(schoolId, studentId) ||
+          teachesSection(schoolId, resource.data.sectionId);
         allow create, update, delete: if isAdmin(schoolId);
       }
 
+      // Teachers: only their own assignments (the app queries teacherUid == their uid).
       match /teacherAssignments/{assignmentId} {
-        allow read: if isAdmin(schoolId) || isTeacher(schoolId);
+        allow read: if isAdmin(schoolId) ||
+          (isTeacher(schoolId) && resource.data.teacherUid == request.auth.uid);
         allow create, update, delete: if isAdmin(schoolId);
       }
 
@@ -118,14 +151,20 @@ service cloud.firestore {
         allow delete: if isAdmin(schoolId);
       }
 
+      // Teachers: assessments of a section + subject pair they are assigned to. A list query must pin both
+      // fields (subjectId == S plus sectionId == X or sectionId in [...]) for the rule to be provable.
       match /assessments/{assessmentId} {
-        allow read: if hasUserRecord(schoolId);
+        allow read: if isAdmin(schoolId) || isStudent(schoolId) ||
+          teachesPair(schoolId, resource.data.sectionId, resource.data.subjectId);
         allow create, update, delete: if isAdmin(schoolId);
       }
 
+      // Teachers: marks of assessments in their assigned pairs. Every assessmentId a query can match costs
+      // one document read (the assessment), and a query may make only a few, so an "in" query on
+      // assessmentId has to stay small (see the teacher scope tests).
       match /scores/{scoreId} {
-        allow read: if isAdmin(schoolId) || isTeacher(schoolId) ||
-          isStudentSelf(schoolId, resource.data.studentId);
+        allow read: if isAdmin(schoolId) || isStudentSelf(schoolId, resource.data.studentId) ||
+          teachesAssessment(schoolId, resource.data.assessmentId);
 
         allow create: if canWriteScore(schoolId, scoreId);
 
@@ -138,8 +177,10 @@ service cloud.firestore {
         allow delete: if isAdmin(schoolId);
       }
 
+      // Teachers read no result snapshots: one holds a student's results in every subject, and the app
+      // downloads none for teachers.
       match /resultSnapshots/{snapshotId} {
-        allow read: if isAdmin(schoolId) || isTeacher(schoolId) || (
+        allow read: if isAdmin(schoolId) || (
           isStudentSelf(schoolId, resource.data.studentId) &&
           get(/databases/$(database)/documents/schools/$(schoolId)/assessmentCycles/$(resource.data.cycleId)).data.published == true
         );

@@ -93,9 +93,15 @@ describe("firestore security rules", () => {
     await assertFails(db.doc(`schools/${SCHOOL}/resultSnapshots/${id}`).get());
   });
 
-  test.each(["admin-uid", "teacher-uid"])("staff %s can inspect unpublished results", async (uid) => {
-    await assertSucceeds(env.authenticatedContext(uid).firestore()
+  test("admin can inspect unpublished results", async () => {
+    await assertSucceeds(env.authenticatedContext("admin-uid").firestore()
       .doc(`schools/${SCHOOL}/resultSnapshots/draft-own`).get());
+  });
+
+  // A snapshot holds every subject's result; teachers see marks only through their assignments.
+  test.each(["draft-own", "published-own"])('teacher cannot read result "%s"', async (id) => {
+    await assertFails(env.authenticatedContext("teacher-uid").firestore()
+      .doc(`schools/${SCHOOL}/resultSnapshots/${id}`).get());
   });
 
   test("different-school admin cannot read published results", async () => {

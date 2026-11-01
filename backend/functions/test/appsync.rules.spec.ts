@@ -25,8 +25,13 @@ describe("android inbound sync queries", () => {
       });
       const fixtures: Record<string, Record<string, unknown>> = {
         "users/admin-uid": profile("admin-uid", "ADMIN"),
-        "users/teacher-uid": profile("teacher-uid", "TEACHER"),
-        "users/other-teacher": profile("other-teacher", "TEACHER"),
+        // assignmentSections as onTeacherAssignmentWrite mirrors the teacherAssignments below.
+        "users/teacher-uid": profile("teacher-uid", "TEACHER", {
+          assignmentSections: { "g1_a_math_teacher-uid": "g1_a", "g1_b_science_teacher-uid": "g1_b" },
+        }),
+        "users/other-teacher": profile("other-teacher", "TEACHER", {
+          assignmentSections: { "g2_a_history_other-teacher": "g2_a" },
+        }),
         // As createManagedUserAccount writes a student: auth uid = student id, linked by linkedStudentId.
         "users/student-x": profile("student-x", "STUDENT", {
           mustChangePassword: true, linkedStudentId: "student-x", sectionId: "g1_a",
@@ -214,11 +219,25 @@ describe("android inbound sync queries", () => {
         .toEqual(["student-x", "student-y", "student-z"]);
     });
 
-    test("phase 1 assessments: sectionId in [assigned sections], orderBy(__name__), limit 500", async () => {
-      expect(await assertSucceeds(fullScan(db(), "assessments", [where("sectionId", "in", sectionIds)])))
-        .toEqual(["math-g1a", "science-g1a", "science-g1b"]);
+    // Teachers read only the assessments of their assigned section + subject pairs, so this query has to
+    // pin the subject too: one query per assigned subject, over the sections it is assigned in. #15 sends
+    // sectionId in [assigned sections] alone, which the rules refuse (below); its InboundScope needs this.
+    test("phase 1 assessments: subjectId == S and sectionId in [S's sections], per subject, orderBy(__name__), limit 500", async () => {
+      const bySubject = { math: ["g1_a"], science: ["g1_b"] };
+      const ids: string[] = [];
+      for (const [subjectId, sections] of Object.entries(bySubject)) {
+        ids.push(...await assertSucceeds(fullScan(db(), "assessments",
+          [where("subjectId", "==", subjectId), where("sectionId", "in", sections)])));
+      }
+      expect(sorted(ids)).toEqual(assessmentIds);
     });
 
+    test("phase 1 assessments as #15 sends it (sectionId in [...] alone) is refused: it can match unassigned subjects", async () => {
+      await assertFails(fullScan(db(), "assessments", [where("sectionId", "in", sectionIds)]));
+    });
+
+    // Each assessmentId costs the rules one document read, so #15's chunks of 30 ids have to become chunks
+    // of at most 8 (teacherscope.rules.spec.ts, "query cost"). Two ids here.
     test("phase 2 scores: assessmentId in [assigned assessments], orderBy(__name__), limit 500", async () => {
       expect(await assertSucceeds(fullScan(db(), "scores", [where("assessmentId", "in", assessmentIds)])))
         .toEqual(["x-math", "y-math", "z-science"]);
@@ -227,6 +246,20 @@ describe("android inbound sync queries", () => {
     test("over-broad: cannot list the school's users", async () => {
       await assertFails(fullScan(db(), "users"));
       await assertFails(getDocsFromServer(query(col(db(), "users"), where("role", "==", "TEACHER"))));
+    });
+
+    test.each(["students", "assessments", "scores", "resultSnapshots", "teacherAssignments"])(
+      "over-broad: whole %s collection is refused", async (name) => {
+        await assertFails(fullScan(db(), name));
+      });
+
+    test("over-broad: the admin's incremental resultSnapshots query is refused (teachers download none)", async () => {
+      await assertFails(changesScan(db(), "resultSnapshots"));
+    });
+
+    test("over-broad: another teacher's assignments and an unassigned section's students are refused", async () => {
+      await assertFails(fullScan(db(), "teacherAssignments", [where("teacherUid", "==", "other-teacher")]));
+      await assertFails(fullScan(db(), "students", [where("sectionId", "in", [...sectionIds, "g2_a"])]));
     });
 
     test("over-broad: cannot query its assignments in another school", async () => {
