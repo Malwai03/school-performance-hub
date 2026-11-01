@@ -28,4 +28,25 @@ interface ResultSnapshotDao {
 
     @Query("DELETE FROM result_snapshots WHERE sectionId = :sectionId")
     suspend fun deleteBySection(sectionId: String)
+
+    // Inbound sync (data/sync/RoomInboundLocal). Ids compare with SQLite's BINARY collation,
+    // the same byte order Firestore uses for document ids.
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(rows: List<ResultSnapshotEntity>)
+
+    @Query("SELECT * FROM result_snapshots")
+    suspend fun getAllRows(): List<ResultSnapshotEntity>
+
+    @Query("SELECT * FROM result_snapshots WHERE snapshotId IN (:ids)")
+    suspend fun getByIds(ids: List<String>): List<ResultSnapshotEntity>
+
+    @Query(
+        "SELECT * FROM result_snapshots WHERE (:afterId IS NULL OR snapshotId > :afterId) " +
+            "AND (:throughId IS NULL OR snapshotId <= :throughId)",
+    )
+    suspend fun getInIdRange(afterId: String?, throughId: String?): List<ResultSnapshotEntity>
+
+    @Query("DELETE FROM result_snapshots WHERE snapshotId IN (:ids)")
+    suspend fun deleteAllByIds(ids: List<String>)
 }

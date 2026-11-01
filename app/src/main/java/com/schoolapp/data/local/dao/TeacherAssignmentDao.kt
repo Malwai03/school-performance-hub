@@ -34,4 +34,25 @@ interface TeacherAssignmentDao {
 
     @Query("DELETE FROM teacher_assignments WHERE subjectId = :subjectId")
     suspend fun deleteBySubject(subjectId: String)
+
+    // Inbound sync (data/sync/RoomInboundLocal). Ids compare with SQLite's BINARY collation,
+    // the same byte order Firestore uses for document ids.
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(rows: List<TeacherAssignmentEntity>)
+
+    @Query("SELECT * FROM teacher_assignments")
+    suspend fun getAllRows(): List<TeacherAssignmentEntity>
+
+    @Query("SELECT * FROM teacher_assignments WHERE assignmentId IN (:ids)")
+    suspend fun getByIds(ids: List<String>): List<TeacherAssignmentEntity>
+
+    @Query(
+        "SELECT * FROM teacher_assignments WHERE (:afterId IS NULL OR assignmentId > :afterId) " +
+            "AND (:throughId IS NULL OR assignmentId <= :throughId)",
+    )
+    suspend fun getInIdRange(afterId: String?, throughId: String?): List<TeacherAssignmentEntity>
+
+    @Query("DELETE FROM teacher_assignments WHERE assignmentId IN (:ids)")
+    suspend fun deleteAllByIds(ids: List<String>)
 }

@@ -124,6 +124,14 @@ object LocalDataPolicy {
             firebaseUid == sessionUid
 
     /**
+     * Downloads from the server go into the local data only for the account uploads may be made
+     * as: a real account that owns the local data and is signed in to Firebase as that same uid.
+     * Never into demo data, and never into another (or an unknown) account's data.
+     */
+    fun mayDownload(dataOwner: String?, sessionUid: String?, firebaseUid: String?): Boolean =
+        mayUpload(dataOwner, sessionUid, firebaseUid)
+
+    /**
      * Owner to record at startup for local data whose owner was never recorded (older app
      * versions): the account that is still validly signed in, which the old sync worker
      * uploaded as anyway. With nobody signed in the owner stays unknown.

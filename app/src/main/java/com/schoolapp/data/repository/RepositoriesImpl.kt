@@ -58,7 +58,18 @@ import com.schoolapp.domain.repository.MarksRepository
 import com.schoolapp.domain.repository.MasterDataRepository
 import com.schoolapp.domain.repository.SignOutResult
 import com.schoolapp.domain.repository.StudentTrend
+import com.schoolapp.data.sync.DataStoreInboundState
+import com.schoolapp.data.sync.FirestoreInboundRemote
+import com.schoolapp.data.sync.InboundDocs
+import com.schoolapp.data.sync.InboundSyncEngine
+import com.schoolapp.data.sync.LocalChangeTracker
+import com.schoolapp.data.sync.RoomInboundLocal
 import com.schoolapp.data.sync.ScoreUploader
+import com.schoolapp.core.logic.SyncCollection
+import com.schoolapp.domain.repository.SyncOutcome
+import com.schoolapp.domain.repository.SyncReport
+import com.schoolapp.domain.repository.SyncRepository
+import com.schoolapp.domain.repository.SyncTrigger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
@@ -77,14 +88,22 @@ class AppContainer(context: Context) {
 
     /** Offline demo login (bundled seed users, pass123): debug builds only. */
     private val demoLoginEnabled: Boolean = BuildConfig.DEMO_LOGIN_ENABLED
-    private val localData = LocalDataGuard(db, sessionStore, demoLoginEnabled)
+    private val inboundSyncState = DataStoreInboundState(context)
+    private val localData = LocalDataGuard(db, sessionStore, demoLoginEnabled, inboundSyncState)
+
+    /** Local changes a download must not overwrite (shared by the repositories and the sync). */
+    private val localChanges = LocalChangeTracker()
 
     val authRepository: AuthRepository =
         AuthRepositoryImpl(db, sessionStore, localData, demoLoginEnabled, firebaseAuth, firestore, functions)
     val masterDataRepository: MasterDataRepository =
-        MasterDataRepositoryImpl(db, firestore, sessionStore, firebaseAuth)
+        MasterDataRepositoryImpl(db, firestore, sessionStore, firebaseAuth, localChanges)
     val marksRepository: MarksRepository =
-        MarksRepositoryImpl(db, firestore, functions, storage, sessionStore, firebaseAuth)
+        MarksRepositoryImpl(db, firestore, functions, storage, sessionStore, firebaseAuth, localChanges)
+
+    /** Downloads from Firestore into Room: first screen after sign-in, pull-to-refresh, background job. */
+    val syncRepository: SyncRepository =
+        SyncRepositoryImpl(db, sessionStore, localData, firebaseAuth, firestore, localChanges, inboundSyncState)
     val analyticsRepository: AnalyticsRepository =
         AnalyticsRepositoryImpl(db, firestore, sessionStore, firebaseAuth)
 
@@ -354,16 +373,19 @@ private class MasterDataRepositoryImpl(
     private val firestore: FirebaseFirestore?,
     private val sessionStore: SessionStore,
     private val auth: FirebaseAuth?,
+    private val localChanges: LocalChangeTracker,
 ) : MasterDataRepository {
 
     // Every change below is made locally first, then uploaded. If the server refuses it, the
     // local change is undone and the error reaches the caller (LocalFirstChange), so a refused
-    // change is never reported as done and never lingers only on this device.
+    // change is never reported as done and never lingers only on this device. While a change is
+    // in flight its rows are registered with [localChanges], so a download running meanwhile
+    // neither overwrites nor deletes them.
 
     override suspend fun upsertSection(section: GradeSection) {
         withContext(Dispatchers.IO) {
             val previous = db.sectionDao().getById(section.sectionId)
-            LocalFirstChange.run(
+            localChanges.tracking(listOf(SyncCollection.SECTIONS to section.sectionId)) { LocalFirstChange.run(
                 apply = { db.sectionDao().upsert(section.toEntity()) },
                 upload = {
                     syncDoc("sections", section.sectionId, mapOf(
@@ -376,14 +398,14 @@ private class MasterDataRepositoryImpl(
                 undo = {
                     if (previous != null) db.sectionDao().upsert(previous) else db.sectionDao().deleteById(section.sectionId)
                 },
-            )
+            ) }
         }
     }
 
     override suspend fun upsertSubject(subject: Subject) {
         withContext(Dispatchers.IO) {
             val previous = db.subjectDao().getById(subject.subjectId)
-            LocalFirstChange.run(
+            localChanges.tracking(listOf(SyncCollection.SUBJECTS to subject.subjectId)) { LocalFirstChange.run(
                 apply = { db.subjectDao().upsert(subject.toEntity()) },
                 upload = {
                     syncDoc("subjects", subject.subjectId, mapOf(
@@ -398,14 +420,14 @@ private class MasterDataRepositoryImpl(
                 undo = {
                     if (previous != null) db.subjectDao().upsert(previous) else db.subjectDao().deleteById(subject.subjectId)
                 },
-            )
+            ) }
         }
     }
 
     override suspend fun upsertStudent(student: Student) {
         withContext(Dispatchers.IO) {
             val previous = db.studentDao().getById(student.studentId)
-            LocalFirstChange.run(
+            localChanges.tracking(listOf(SyncCollection.STUDENTS to student.studentId)) { LocalFirstChange.run(
                 apply = { db.studentDao().upsert(student.toEntity()) },
                 upload = {
                     syncDoc("students", student.studentId, mapOf(
@@ -420,7 +442,7 @@ private class MasterDataRepositoryImpl(
                 undo = {
                     if (previous != null) db.studentDao().upsert(previous) else db.studentDao().deleteById(student.studentId)
                 },
-            )
+            ) }
         }
     }
 
@@ -437,7 +459,7 @@ private class MasterDataRepositoryImpl(
                 students.flatMap { db.resultSnapshotDao().getStudentTrend(it.studentId) }).distinctBy { it.snapshotId }
             val assignments = db.teacherAssignmentDao().getBySection(sectionId)
 
-            LocalFirstChange.run(
+            localChanges.tracking(sectionDeleteKeys(sectionId, students, assessments, scores, snapshots, assignments)) { LocalFirstChange.run(
                 apply = {
                     db.withTransaction {
                         if (assessmentIds.isNotEmpty()) {
@@ -471,7 +493,7 @@ private class MasterDataRepositoryImpl(
                         assignments = assignments,
                     )
                 },
-            )
+            ) }
         }
     }
 
@@ -480,7 +502,8 @@ private class MasterDataRepositoryImpl(
             val student = db.studentDao().getById(studentId) ?: return@withContext
             val scores = db.scoreDao().getByStudent(studentId)
             val snapshots = db.resultSnapshotDao().getStudentTrend(studentId)
-            LocalFirstChange.run(
+            localChanges.tracking(listOf(SyncCollection.STUDENTS to studentId) + scores.map { SyncCollection.SCORES to it.scoreId } +
+                snapshots.map { SyncCollection.SNAPSHOTS to it.snapshotId }) { LocalFirstChange.run(
                 apply = {
                     db.withTransaction {
                         db.scoreDao().deleteByStudent(studentId)
@@ -490,7 +513,7 @@ private class MasterDataRepositoryImpl(
                 },
                 upload = { deleteDocs(listOf("students" to student.studentId)) },
                 undo = { restore(students = listOf(student), scores = scores, snapshots = snapshots) },
-            )
+            ) }
         }
     }
 
@@ -501,7 +524,8 @@ private class MasterDataRepositoryImpl(
             val assessmentIds = assessments.map { it.assessmentId }
             val scores = assessmentIds.flatMap { db.scoreDao().getByAssessment(it) }
             val assignments = db.teacherAssignmentDao().getBySubject(subjectId)
-            LocalFirstChange.run(
+            localChanges.tracking(listOf(SyncCollection.SUBJECTS to subjectId) + assessments.map { SyncCollection.ASSESSMENTS to it.assessmentId } +
+                scores.map { SyncCollection.SCORES to it.scoreId } + assignments.map { SyncCollection.ASSIGNMENTS to it.assignmentId }) { LocalFirstChange.run(
                 apply = {
                     db.withTransaction {
                         if (assessmentIds.isNotEmpty()) {
@@ -518,14 +542,14 @@ private class MasterDataRepositoryImpl(
                 undo = {
                     restore(subjects = listOf(subject), assessments = assessments, scores = scores, assignments = assignments)
                 },
-            )
+            ) }
         }
     }
 
     override suspend fun upsertAssessmentCycle(cycle: AssessmentCycle) {
         withContext(Dispatchers.IO) {
             val previous = db.assessmentCycleDao().getById(cycle.cycleId)
-            LocalFirstChange.run(
+            localChanges.tracking(listOf(SyncCollection.CYCLES to cycle.cycleId)) { LocalFirstChange.run(
                 apply = { db.assessmentCycleDao().upsert(cycle.toEntity()) },
                 upload = {
                     syncDoc("assessmentCycles", cycle.cycleId, mapOf(
@@ -540,14 +564,14 @@ private class MasterDataRepositoryImpl(
                 undo = {
                     if (previous != null) db.assessmentCycleDao().upsert(previous) else db.assessmentCycleDao().deleteById(cycle.cycleId)
                 },
-            )
+            ) }
         }
     }
 
     override suspend fun upsertAssessment(assessment: Assessment) {
         withContext(Dispatchers.IO) {
             val previous = db.assessmentDao().getById(assessment.assessmentId)
-            LocalFirstChange.run(
+            localChanges.tracking(listOf(SyncCollection.ASSESSMENTS to assessment.assessmentId)) { LocalFirstChange.run(
                 apply = { db.assessmentDao().upsert(assessment.toEntity()) },
                 upload = {
                     syncDoc("assessments", assessment.assessmentId, mapOf(
@@ -563,7 +587,7 @@ private class MasterDataRepositoryImpl(
                 undo = {
                     if (previous != null) db.assessmentDao().upsert(previous) else db.assessmentDao().deleteById(assessment.assessmentId)
                 },
-            )
+            ) }
         }
     }
 
@@ -578,7 +602,7 @@ private class MasterDataRepositoryImpl(
                 teacherUid = teacherUid,
             )
             val previous = db.teacherAssignmentDao().getById(assignment.assignmentId)
-            LocalFirstChange.run(
+            localChanges.tracking(listOf(SyncCollection.ASSIGNMENTS to assignment.assignmentId)) { LocalFirstChange.run(
                 apply = { db.teacherAssignmentDao().upsert(assignment.toEntity()) },
                 upload = {
                     syncDoc("teacherAssignments", assignment.assignmentId, mapOf(
@@ -596,7 +620,7 @@ private class MasterDataRepositoryImpl(
                         db.teacherAssignmentDao().deleteById(assignment.assignmentId)
                     }
                 },
-            )
+            ) }
         }
     }
 
@@ -690,6 +714,22 @@ private class MasterDataRepositoryImpl(
         }
     }
 
+    /** Every row a section delete touches locally. */
+    private fun sectionDeleteKeys(
+        sectionId: String,
+        students: List<StudentEntity>,
+        assessments: List<AssessmentEntity>,
+        scores: List<ScoreEntity>,
+        snapshots: List<ResultSnapshotEntity>,
+        assignments: List<TeacherAssignmentEntity>,
+    ): List<Pair<SyncCollection, String>> =
+        listOf(SyncCollection.SECTIONS to sectionId) +
+            students.map { SyncCollection.STUDENTS to it.studentId } +
+            assessments.map { SyncCollection.ASSESSMENTS to it.assessmentId } +
+            scores.map { SyncCollection.SCORES to it.scoreId } +
+            snapshots.map { SyncCollection.SNAPSHOTS to it.snapshotId } +
+            assignments.map { SyncCollection.ASSIGNMENTS to it.assignmentId }
+
     private suspend fun currentSchoolId(): String =
         SchoolScope.requireSessionSchoolId(storedSessionSchoolId(db, sessionStore))
 
@@ -705,6 +745,7 @@ private class MarksRepositoryImpl(
     private val storage: FirebaseStorage?,
     private val sessionStore: SessionStore,
     private val auth: FirebaseAuth?,
+    private val localChanges: LocalChangeTracker,
 ) : MarksRepository {
 
     override suspend fun upsertScore(score: ScoreEntry) {
@@ -716,6 +757,8 @@ private class MarksRepositoryImpl(
             val canonicalScore = score.copy(scoreId = canonicalId)
             db.scoreDao().upsert(canonicalScore.toEntity(synced = false))
             db.scoreDao().deleteDuplicates(score.assessmentId, score.studentId, canonicalId)
+            // A download page fetched before this save holds an older copy: it must not win.
+            localChanges.touch(SyncCollection.SCORES, listOf(canonicalId))
             if (firestore == null || sessionStore.getDataOwner() == LocalDataPolicy.DEMO_OWNER) {
                 // Nothing to upload: no cloud configured, or demo data, which never leaves the device.
                 db.scoreDao().markSynced(canonicalId)
@@ -965,21 +1008,36 @@ private class AnalyticsRepositoryImpl(
     private suspend fun cachedTrend(studentId: String): List<ResultSnapshot> =
         db.resultSnapshotDao().getStudentTrend(studentId).map { it.toDomain(it.subjectPercentagesJson.toSubjectMap()) }
 
-    /** The student's results in their school, from the server only; null if it could not be asked. */
+    /**
+     * The student's results in their school, from the server only; null if it could not be asked.
+     *
+     * One query per published cycle (studentId == X and cycleId == C): the result-snapshot read
+     * rule (PR #9) also checks that the snapshot's cycle is published, which Firestore can only
+     * check for a query that names the cycle. Results of unpublished cycles are not asked for,
+     * so a withdrawn publication removes them from the cache.
+     */
     private suspend fun fetchServerResults(
         remoteStore: FirebaseFirestore,
         schoolId: String,
         studentId: String,
     ): ResultSync.ServerResults? {
+        val school = remoteStore.collection("schools").document(schoolId)
         val docs = try {
-            remoteStore.collection("schools")
-                .document(schoolId)
-                .collection("resultSnapshots")
-                .whereEqualTo("studentId", studentId)
-                // Not the offline cache: an empty or partial cache must not look like "no results".
+            // Not the offline cache: an empty or partial cache must not look like "no results".
+            val publishedCycleIds = school.collection("assessmentCycles")
+                .whereEqualTo("published", true)
                 .get(Source.SERVER)
                 .await()
                 .documents
+                .map { it.id }
+            publishedCycleIds.flatMap { cycleId ->
+                school.collection("resultSnapshots")
+                    .whereEqualTo("studentId", studentId)
+                    .whereEqualTo("cycleId", cycleId)
+                    .get(Source.SERVER)
+                    .await()
+                    .documents
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -991,23 +1049,8 @@ private class AnalyticsRepositoryImpl(
         )
     }
 
-    private fun DocumentSnapshot.toResultSnapshotOrNull(): ResultSnapshot? = runCatching {
-        val map = (get("subjectPercentages") as? Map<*, *>)
-            ?.entries
-            ?.filter { it.key is String && it.value is Number }
-            ?.associate { it.key as String to (it.value as Number).toDouble() }
-            .orEmpty()
-        ResultSnapshot(
-            snapshotId = id,
-            cycleId = getString("cycleId") ?: return null,
-            sectionId = getString("sectionId") ?: return null,
-            studentId = getString("studentId") ?: return null,
-            subjectPercentages = map,
-            overallPercentage = getDouble("overallPercentage"),
-            passStatus = PassStatus.valueOf(getString("passStatus") ?: PassStatus.INCOMPLETE.name),
-            riskLevel = RiskLevel.valueOf(getString("riskLevel") ?: RiskLevel.HIGH.name),
-        )
-    }.getOrNull()
+    private fun DocumentSnapshot.toResultSnapshotOrNull(): ResultSnapshot? =
+        runCatching { InboundDocs.snapshot(id, data.orEmpty()) }.getOrNull()
 
     override suspend fun getSectionSummary(cycleId: String, sectionId: String): SectionSummary {
         return withContext(Dispatchers.IO) {
@@ -1048,6 +1091,55 @@ private class AnalyticsRepositoryImpl(
                 topperStudentId = topper,
                 riskDistribution = risk,
             )
+        }
+    }
+}
+
+/**
+ * Inbound sync: downloads the signed-in account's share of its school into Room. Only for a
+ * real account that owns the local data and is signed in to Firebase as itself; a demo session,
+ * a build without Firebase, or someone else's local data gets nothing.
+ */
+private class SyncRepositoryImpl(
+    private val db: SchoolDatabase,
+    private val sessionStore: SessionStore,
+    private val localData: LocalDataGuard,
+    private val auth: FirebaseAuth?,
+    private val firestore: FirebaseFirestore?,
+    localChanges: LocalChangeTracker,
+    syncState: DataStoreInboundState,
+) : SyncRepository {
+
+    private val engine: InboundSyncEngine? = firestore?.let { remote ->
+        InboundSyncEngine(
+            remote = FirestoreInboundRemote(remote),
+            local = RoomInboundLocal(db) { write -> localData.withLock { write() } },
+            stateStore = syncState,
+            tracker = localChanges,
+        )
+    }
+
+    override suspend fun syncNow(trigger: SyncTrigger): SyncReport = withContext(Dispatchers.IO) {
+        val sync = engine ?: return@withContext SyncReport(SyncOutcome.UNAVAILABLE)
+        val sessionUid = sessionStore.getUserId() ?: return@withContext SyncReport(SyncOutcome.UNAVAILABLE)
+        val schoolId = downloadSchoolIdOrNull(db, sessionStore, auth)
+            ?: return@withContext SyncReport(SyncOutcome.UNAVAILABLE)
+        val user = db.userDao().getByUid(sessionUid)?.toDomain()
+            ?: return@withContext SyncReport(SyncOutcome.UNAVAILABLE)
+        val generation = localData.generation
+        // Checked under the local-data lock before every page is written.
+        val stillValid: suspend () -> Boolean = {
+            localData.generation == generation &&
+                sessionStore.getUserId() == sessionUid &&
+                LocalDataPolicy.mayDownload(sessionStore.getDataOwner(), sessionUid, auth?.currentUser?.uid)
+        }
+        try {
+            sync.run(user, schoolId, trigger, stillValid)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Offline or refused: the pages already applied stay, the rest waits for the next run.
+            SyncReport(SyncOutcome.FAILED)
         }
     }
 }

@@ -23,6 +23,10 @@ import com.schoolapp.domain.repository.AnalyticsRepository
 import com.schoolapp.domain.repository.AuthRepository
 import com.schoolapp.domain.repository.MarksRepository
 import com.schoolapp.domain.repository.MasterDataRepository
+import com.schoolapp.domain.repository.SyncRepository
+import com.schoolapp.domain.repository.SyncTrigger
+import com.schoolapp.ui.common.changedLocalData
+import com.schoolapp.ui.common.syncNoticeFor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -134,6 +138,10 @@ data class AdminDashboardState(
     val publishReadinessError: Boolean = false,
     val error: String? = null,
     val info: String? = null,
+    /** A download from the school server is running (pull-to-refresh indicator). */
+    val syncing: Boolean = false,
+    /** Why the data on screen may not be the server's latest, if it may not be. */
+    val syncNotice: String? = null,
 )
 
 class AdminViewModel(
@@ -141,12 +149,29 @@ class AdminViewModel(
     private val masterDataRepository: MasterDataRepository,
     private val analyticsRepository: AnalyticsRepository,
     private val marksRepository: MarksRepository,
+    private val syncRepository: SyncRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(AdminDashboardState())
     val uiState: StateFlow<AdminDashboardState> = _uiState.asStateFlow()
 
-    init { refresh() }
+    init {
+        // What is on this device first, then whatever the server has (at most hourly on open).
+        refresh()
+        sync(SyncTrigger.APP_OPEN)
+    }
+
+    /** Pull-to-refresh and the refresh button: download from the school server, then reload. */
+    fun pullToRefresh() = sync(SyncTrigger.MANUAL)
+
+    private fun sync(trigger: SyncTrigger) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(syncing = true)
+            val report = syncRepository.syncNow(trigger)
+            _uiState.value = _uiState.value.copy(syncing = false, syncNotice = syncNoticeFor(report))
+            if (report.changedLocalData) refresh()
+        }
+    }
 
     private fun destinationToTab(destination: AdminDestination): Int = when (destination) {
         AdminDestination.DASHBOARD -> 0
@@ -388,6 +413,8 @@ class AdminViewModel(
 
                 AdminDashboardState(
                     loading = false,
+                    syncing = _uiState.value.syncing,
+                    syncNotice = _uiState.value.syncNotice,
                     selectedTab = destinationToTab(previous.destination),
                     destination = previous.destination,
                     context = context,
@@ -1700,7 +1727,9 @@ class AdminViewModel(
                     info = "${entityType.replaceFirstChar { it.uppercase() }} import completed",
                     error = null,
                 )
+                // The import was written on the server: bring it down (sync reloads the screen).
                 refresh()
+                sync(SyncTrigger.MANUAL)
             }.onFailure {
                 _uiState.value = _uiState.value.copy(error = it.message)
             }
@@ -1730,11 +1759,12 @@ class AdminViewModel(
             masterDataRepository: MasterDataRepository,
             analyticsRepository: AnalyticsRepository,
             marksRepository: MarksRepository,
+            syncRepository: SyncRepository,
         ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    AdminViewModel(authRepository, masterDataRepository, analyticsRepository, marksRepository) as T
+                    AdminViewModel(authRepository, masterDataRepository, analyticsRepository, marksRepository, syncRepository) as T
             }
     }
 }

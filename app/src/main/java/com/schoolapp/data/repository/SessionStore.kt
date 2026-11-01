@@ -73,3 +73,18 @@ internal suspend fun uploadSchoolIdOrNull(
     if (!LocalDataPolicy.mayUpload(sessionStore.getDataOwner(), sessionUid, firebaseUid)) return null
     return storedSessionSchoolId(db, sessionStore)
 }
+
+/**
+ * School to download the signed-in account's data from, or null when nothing may be downloaded
+ * into the local data: no real Firebase session, a demo session, or data owned by someone else.
+ */
+internal suspend fun downloadSchoolIdOrNull(
+    db: SchoolDatabase,
+    sessionStore: SessionStore,
+    auth: FirebaseAuth?,
+): String? {
+    val sessionUid = sessionStore.getUserId()
+    val firebaseUid = auth?.currentUser?.uid
+    if (!LocalDataPolicy.mayDownload(sessionStore.getDataOwner(), sessionUid, firebaseUid)) return null
+    return storedSessionSchoolId(db, sessionStore)
+}

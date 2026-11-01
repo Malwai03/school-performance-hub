@@ -14,6 +14,10 @@ import com.schoolapp.core.model.Subject
 import com.schoolapp.domain.repository.AuthRepository
 import com.schoolapp.domain.repository.MarksRepository
 import com.schoolapp.domain.repository.MasterDataRepository
+import com.schoolapp.domain.repository.SyncRepository
+import com.schoolapp.domain.repository.SyncTrigger
+import com.schoolapp.ui.common.changedLocalData
+import com.schoolapp.ui.common.syncNoticeFor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,19 +41,38 @@ data class TeacherMarksState(
     val showPublishDialog: Boolean = false,
     val info: String? = null,
     val error: String? = null,
+    /** A download from the school server is running (pull-to-refresh indicator). */
+    val syncing: Boolean = false,
+    /** Why the data on screen may not be the server's latest, if it may not be. */
+    val syncNotice: String? = null,
 )
 
 class TeacherViewModel(
     private val authRepository: AuthRepository,
     private val masterDataRepository: MasterDataRepository,
     private val marksRepository: MarksRepository,
+    private val syncRepository: SyncRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(TeacherMarksState())
     val uiState: StateFlow<TeacherMarksState> = _uiState.asStateFlow()
 
     init {
+        // What is on this device first, then whatever the server has (at most hourly on open).
         refresh()
+        sync(SyncTrigger.APP_OPEN)
+    }
+
+    /** Pull-to-refresh and the refresh button: download from the school server, then reload. */
+    fun pullToRefresh() = sync(SyncTrigger.MANUAL)
+
+    private fun sync(trigger: SyncTrigger) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(syncing = true)
+            val report = syncRepository.syncNow(trigger)
+            _uiState.value = _uiState.value.copy(syncing = false, syncNotice = syncNoticeFor(report))
+            if (report.changedLocalData) refresh()
+        }
     }
 
     fun refresh() {
@@ -113,7 +136,9 @@ class TeacherViewModel(
                     scoreDrafts = draftMap,
                     absenceStatus = statusMap,
                 )
-            }.onSuccess { _uiState.value = it }
+            }.onSuccess {
+                _uiState.value = it.copy(syncing = _uiState.value.syncing, syncNotice = _uiState.value.syncNotice)
+            }
                 .onFailure { error -> _uiState.value = _uiState.value.copy(loading = false, error = error.message) }
         }
     }
@@ -267,11 +292,12 @@ class TeacherViewModel(
             authRepository: AuthRepository,
             masterDataRepository: MasterDataRepository,
             marksRepository: MarksRepository,
+            syncRepository: SyncRepository,
         ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return TeacherViewModel(authRepository, masterDataRepository, marksRepository) as T
+                    return TeacherViewModel(authRepository, masterDataRepository, marksRepository, syncRepository) as T
                 }
             }
     }

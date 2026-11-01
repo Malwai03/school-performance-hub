@@ -49,6 +49,7 @@ import com.schoolapp.core.ui.theme.PrimaryBlue
 import com.schoolapp.core.ui.theme.SuccessGreen
 import com.schoolapp.core.ui.theme.TextSecondary
 import com.schoolapp.core.ui.theme.WarningAmber
+import com.schoolapp.ui.common.SyncRefreshBox
 
 @Composable
 fun StudentDashboardScreen(
@@ -60,7 +61,7 @@ fun StudentDashboardScreen(
     Scaffold(
         topBar = {
             AppTopBar(title = "My Results") {
-                IconButton(onClick = viewModel::refresh) {
+                IconButton(onClick = viewModel::pullToRefresh) {
                     Icon(Icons.Filled.Refresh, contentDescription = "Refresh", tint = TextSecondary)
                 }
                 IconButton(onClick = onLogout) {
@@ -85,15 +86,21 @@ fun StudentDashboardScreen(
             }
         },
     ) { padding ->
-        AnimatedContent(
-            targetState = state.selectedTab,
-            transitionSpec = { fadeIn() togetherWith fadeOut() },
-            label = "student-tab",
+        SyncRefreshBox(
+            syncing = state.syncing,
+            notice = state.syncNotice,
+            onRefresh = viewModel::pullToRefresh,
             modifier = Modifier.padding(padding),
-        ) { tab ->
-            when (tab) {
-                0 -> OverviewTab(state, onLogout)
-                1 -> SubjectsTab(state)
+        ) {
+            AnimatedContent(
+                targetState = state.selectedTab,
+                transitionSpec = { fadeIn() togetherWith fadeOut() },
+                label = "student-tab",
+            ) { tab ->
+                when (tab) {
+                    0 -> OverviewTab(state, onLogout)
+                    1 -> SubjectsTab(state)
+                }
             }
         }
     }

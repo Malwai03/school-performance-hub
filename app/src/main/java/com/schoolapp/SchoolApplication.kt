@@ -3,6 +3,7 @@ package com.schoolapp
 import android.app.Application
 import androidx.work.Configuration
 import com.schoolapp.data.repository.AppContainer
+import com.schoolapp.data.sync.InboundSyncWorker
 import com.schoolapp.data.sync.ScoreSyncWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +21,7 @@ class SchoolApplication : Application(), Configuration.Provider {
             container.prepareLocalData()
         }
         ScoreSyncWorker.schedule(this)
+        InboundSyncWorker.schedule(this)
     }
 
     override val workManagerConfiguration: Configuration

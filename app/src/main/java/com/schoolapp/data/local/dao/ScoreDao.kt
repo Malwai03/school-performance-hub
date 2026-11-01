@@ -59,4 +59,25 @@ interface ScoreDao {
         obtainedMarks: Double,
         status: String,
     ): Int
+
+    // Inbound sync (data/sync/RoomInboundLocal). Ids compare with SQLite's BINARY collation,
+    // the same byte order Firestore uses for document ids.
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(rows: List<ScoreEntity>)
+
+    @Query("SELECT * FROM scores")
+    suspend fun getAllRows(): List<ScoreEntity>
+
+    @Query("SELECT * FROM scores WHERE scoreId IN (:ids)")
+    suspend fun getByIds(ids: List<String>): List<ScoreEntity>
+
+    @Query(
+        "SELECT * FROM scores WHERE (:afterId IS NULL OR scoreId > :afterId) " +
+            "AND (:throughId IS NULL OR scoreId <= :throughId)",
+    )
+    suspend fun getInIdRange(afterId: String?, throughId: String?): List<ScoreEntity>
+
+    @Query("DELETE FROM scores WHERE scoreId IN (:ids)")
+    suspend fun deleteAllByIds(ids: List<String>)
 }

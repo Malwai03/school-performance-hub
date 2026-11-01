@@ -15,6 +15,7 @@ import com.schoolapp.core.model.TeacherAssignment
 import com.schoolapp.core.model.UserRole
 import com.schoolapp.data.local.SchoolDatabase
 import com.schoolapp.data.local.entity.toEntity
+import com.schoolapp.data.sync.DataStoreInboundState
 import com.schoolapp.domain.repository.UnsyncedMarksException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -23,13 +24,26 @@ import kotlinx.coroutines.sync.withLock
  * Moves the local Room data between accounts according to [LocalDataPolicy]. Startup, sign-in
  * and sign-out all change the data owner under one lock so they cannot interleave (for example
  * the startup demo seed landing in a real account's freshly cleared database).
+ *
+ * Downloads from the server (inbound sync) write each page under the same lock, so a page can
+ * never land in data that a sign-out or another account's sign-in has just cleared.
  */
 internal class LocalDataGuard(
     private val db: SchoolDatabase,
     private val sessionStore: SessionStore,
     private val demoLoginEnabled: Boolean,
+    private val syncState: DataStoreInboundState,
 ) {
     private val mutex = Mutex()
+
+    /**
+     * Goes up every time the local data is cleared or handed to another owner. A download
+     * compares it before each write: one started before a clear never writes after it, even for
+     * the same account signing straight back in.
+     */
+    @Volatile
+    var generation: Long = 0
+        private set
 
     suspend fun <T> withLock(block: suspend () -> T): T = mutex.withLock { block() }
 
@@ -66,16 +80,24 @@ internal class LocalDataGuard(
         )
         when (action) {
             LocalDataPolicy.SignInAction.Keep -> Unit
-            LocalDataPolicy.SignInAction.Clear -> db.clearAllTables()
+            LocalDataPolicy.SignInAction.Clear -> {
+                db.clearAllTables()
+                syncState.clear()
+            }
             is LocalDataPolicy.SignInAction.ConfirmDiscard ->
                 throw UnsyncedMarksException(action.unsyncedMarks, fromAnotherAccount = true)
         }
+        generation++
         sessionStore.saveDataOwner(incomingOwner)
+        // A sign-in always downloads when its first screen opens.
+        syncState.markDue()
     }
 
     /** Deletes all local data and forgets its owner. Call under [withLock]. */
     suspend fun clearLocked() {
         db.clearAllTables()
+        syncState.clear()
+        generation++
         sessionStore.clearDataOwner()
     }
 

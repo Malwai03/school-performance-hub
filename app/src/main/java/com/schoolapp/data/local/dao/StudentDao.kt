@@ -25,4 +25,25 @@ interface StudentDao {
 
     @Query("SELECT COUNT(*) FROM students")
     suspend fun countAll(): Int
+
+    // Inbound sync (data/sync/RoomInboundLocal). Ids compare with SQLite's BINARY collation,
+    // the same byte order Firestore uses for document ids.
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(rows: List<StudentEntity>)
+
+    @Query("SELECT * FROM students")
+    suspend fun getAllRows(): List<StudentEntity>
+
+    @Query("SELECT * FROM students WHERE studentId IN (:ids)")
+    suspend fun getByIds(ids: List<String>): List<StudentEntity>
+
+    @Query(
+        "SELECT * FROM students WHERE (:afterId IS NULL OR studentId > :afterId) " +
+            "AND (:throughId IS NULL OR studentId <= :throughId)",
+    )
+    suspend fun getInIdRange(afterId: String?, throughId: String?): List<StudentEntity>
+
+    @Query("DELETE FROM students WHERE studentId IN (:ids)")
+    suspend fun deleteAllByIds(ids: List<String>)
 }

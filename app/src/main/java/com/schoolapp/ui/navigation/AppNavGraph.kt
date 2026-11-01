@@ -104,6 +104,7 @@ fun SchoolNavGraph(
                     appContainer.masterDataRepository,
                     appContainer.analyticsRepository,
                     appContainer.marksRepository,
+                    appContainer.syncRepository,
                 ),
             )
             AdminRootScreen(
@@ -117,6 +118,7 @@ fun SchoolNavGraph(
                     appContainer.authRepository,
                     appContainer.masterDataRepository,
                     appContainer.marksRepository,
+                    appContainer.syncRepository,
                 ),
             )
             TeacherMarksScreen(
@@ -130,6 +132,7 @@ fun SchoolNavGraph(
                     appContainer.authRepository,
                     appContainer.analyticsRepository,
                     appContainer.masterDataRepository,
+                    appContainer.syncRepository,
                 ),
             )
             StudentDashboardScreen(
