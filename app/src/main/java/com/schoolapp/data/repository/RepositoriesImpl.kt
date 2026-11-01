@@ -10,6 +10,7 @@ import com.google.firebase.functions.ktx.functions
 import com.google.firebase.ktx.Firebase
 import com.google.firebase.storage.FirebaseStorage
 import com.google.firebase.storage.ktx.storage
+import com.schoolapp.BuildConfig
 import com.schoolapp.core.model.Assessment
 import com.schoolapp.core.model.AssessmentCycle
 import com.schoolapp.core.model.BulkScorePatch
@@ -26,9 +27,12 @@ import com.schoolapp.core.model.Student
 import com.schoolapp.core.model.Subject
 import com.schoolapp.core.model.TeacherAssignment
 import com.schoolapp.core.model.UserRole
+import com.schoolapp.core.logic.DemoLogin
 import com.schoolapp.core.logic.GradingEngine
 import com.schoolapp.core.logic.GradingPolicy
+import com.schoolapp.core.logic.LocalDataPolicy
 import com.schoolapp.core.logic.SchoolScope
+import com.schoolapp.core.logic.UnsyncedMarksChoice
 import com.schoolapp.core.logic.TrendPoint
 import com.schoolapp.data.local.toJsonString
 import com.schoolapp.data.local.toSubjectMap
@@ -39,9 +43,12 @@ import com.schoolapp.domain.repository.AnalyticsRepository
 import com.schoolapp.domain.repository.AuthRepository
 import com.schoolapp.domain.repository.MarksRepository
 import com.schoolapp.domain.repository.MasterDataRepository
+import com.schoolapp.domain.repository.SignOutResult
+import com.schoolapp.data.sync.ScoreUploader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.roundToInt
 import java.util.UUID
 
@@ -53,81 +60,25 @@ class AppContainer(context: Context) {
     private val functions: FirebaseFunctions? = runCatching { Firebase.functions }.getOrNull()
     private val storage: FirebaseStorage? = runCatching { Firebase.storage }.getOrNull()
 
-    val authRepository: AuthRepository = AuthRepositoryImpl(db, sessionStore, firebaseAuth, firestore, functions)
+    /** Offline demo login (bundled seed users, pass123): debug builds only. */
+    private val demoLoginEnabled: Boolean = BuildConfig.DEMO_LOGIN_ENABLED
+    private val localData = LocalDataGuard(db, sessionStore, demoLoginEnabled)
+
+    val authRepository: AuthRepository =
+        AuthRepositoryImpl(db, sessionStore, localData, demoLoginEnabled, firebaseAuth, firestore, functions)
     val masterDataRepository: MasterDataRepository =
-        MasterDataRepositoryImpl(db, firestore, sessionStore)
-    val marksRepository: MarksRepository = MarksRepositoryImpl(db, firestore, functions, storage, sessionStore)
+        MasterDataRepositoryImpl(db, firestore, sessionStore, firebaseAuth)
+    val marksRepository: MarksRepository =
+        MarksRepositoryImpl(db, firestore, functions, storage, sessionStore, firebaseAuth)
     val analyticsRepository: AnalyticsRepository = AnalyticsRepositoryImpl(db, firestore)
 
-    suspend fun seedDemoDataIfNeeded() {
+    /**
+     * Startup housekeeping for the local data: forget a session that may not be restored,
+     * record the owner of data left by older versions, seed the demo data in demo builds.
+     */
+    suspend fun prepareLocalData() {
         withContext(Dispatchers.IO) {
-            if (db.studentDao().countAll() > 0) return@withContext
-
-            // Demo/seed data lives in the default school; demo logins are cached with it.
-            val schoolId = SchoolScope.DEFAULT_SCHOOL_ID
-            db.userDao().upsert(
-                SchoolUser("admin-1", schoolId, UserRole.ADMIN, "Principal Admin", "admin001", true).toEntity(),
-            )
-            db.userDao().upsert(
-                SchoolUser("teacher-1", schoolId, UserRole.TEACHER, "Teacher Maya", "teacher001", true).toEntity(),
-            )
-            db.userDao().upsert(
-                SchoolUser("student-1", schoolId, UserRole.STUDENT, "Student Rohan", "student001", true).toEntity(),
-            )
-
-            val section = GradeSection("g6_a", schoolId, 6, "A")
-            db.sectionDao().upsert(section.toEntity())
-
-            val subjects = listOf(
-                Subject("sub_math_6", schoolId, 6, "Mathematics", 33.0, true),
-                Subject("sub_science_6", schoolId, 6, "Science", 33.0, true),
-                Subject("sub_english_6", schoolId, 6, "English", 33.0, true),
-            )
-            subjects.forEach { db.subjectDao().upsert(it.toEntity()) }
-
-            val students = listOf(
-                Student("student-1", schoolId, section.sectionId, 1, "Rohan Das", true),
-                Student("student-2", schoolId, section.sectionId, 2, "Aisha Noor", true),
-                Student("student-3", schoolId, section.sectionId, 3, "Karan Shah", true),
-            )
-            students.forEach { db.studentDao().upsert(it.toEntity()) }
-
-            db.teacherAssignmentDao().upsert(
-                TeacherAssignment(
-                    assignmentId = "assign-1",
-                    schoolId = schoolId,
-                    sectionId = section.sectionId,
-                    subjectId = "sub_math_6",
-                    teacherUid = "teacher-1",
-                ).toEntity(),
-            )
-
-            val cycle = AssessmentCycle(
-                cycleId = "cycle_2026_ut1",
-                schoolId = schoolId,
-                name = "Unit Test - March",
-                startDateIso = "2026-03-01",
-                endDateIso = "2026-03-15",
-                published = false,
-            )
-            db.assessmentCycleDao().upsert(cycle.toEntity())
-
-            val assessments = listOf(
-                Assessment("assess_math_ut1", cycle.cycleId, section.sectionId, "sub_math_6", "Math Unit Test", 100.0, 1.0),
-                Assessment("assess_science_ut1", cycle.cycleId, section.sectionId, "sub_science_6", "Science Unit Test", 100.0, 1.0),
-                Assessment("assess_english_ut1", cycle.cycleId, section.sectionId, "sub_english_6", "English Unit Test", 100.0, 1.0),
-            )
-            assessments.forEach { db.assessmentDao().upsert(it.toEntity()) }
-
-            val demoScores = listOf(
-                ScoreEntry("score_1", "assess_math_ut1", "student-1", 78.0, com.schoolapp.core.model.ScoreStatus.PRESENT),
-                ScoreEntry("score_2", "assess_science_ut1", "student-1", 72.0, com.schoolapp.core.model.ScoreStatus.PRESENT),
-                ScoreEntry("score_3", "assess_english_ut1", "student-1", 85.0, com.schoolapp.core.model.ScoreStatus.PRESENT),
-                ScoreEntry("score_4", "assess_math_ut1", "student-2", 91.0, com.schoolapp.core.model.ScoreStatus.PRESENT),
-                ScoreEntry("score_5", "assess_science_ut1", "student-2", 88.0, com.schoolapp.core.model.ScoreStatus.PRESENT),
-                ScoreEntry("score_6", "assess_english_ut1", "student-2", 84.0, com.schoolapp.core.model.ScoreStatus.PRESENT),
-            )
-            demoScores.forEach { db.scoreDao().upsert(it.toEntity(synced = true)) }
+            localData.prepareAtStartup(firebaseUid = firebaseAuth?.currentUser?.uid)
         }
     }
 }
@@ -135,70 +86,141 @@ class AppContainer(context: Context) {
 private class AuthRepositoryImpl(
     private val db: SchoolDatabase,
     private val sessionStore: SessionStore,
+    private val localData: LocalDataGuard,
+    private val demoLoginEnabled: Boolean,
     private val auth: FirebaseAuth?,
     private val firestore: FirebaseFirestore?,
     private val functions: FirebaseFunctions?,
 ) : AuthRepository {
 
-    override suspend fun signIn(loginCode: String, password: String): SchoolUser {
+    override suspend fun signIn(
+        loginCode: String,
+        password: String,
+        discardOtherAccountsUnsyncedMarks: Boolean,
+    ): SchoolUser {
         return withContext(Dispatchers.IO) {
             require(loginCode.isNotBlank()) { "Login code is required" }
             require(password.isNotBlank()) { "Password is required" }
 
-            val localUser = db.userDao().getByCode(loginCode)
-            if (localUser != null && password == "pass123") {
-                sessionStore.saveUserId(localUser.uid)
-                return@withContext localUser.toDomain()
+            // Offline demo login: only the bundled seed users, only in demo builds. It never
+            // opens a real account; those always go through Firebase Auth below.
+            val demoUid = DemoLogin.demoUidFor(loginCode, password, demoLoginEnabled)
+            if (demoUid != null) {
+                return@withContext signInDemo(demoUid, discardOtherAccountsUnsyncedMarks)
             }
 
-            val firebaseAuth = auth ?: throw IllegalStateException(
-                "Firebase auth not configured. Use demo login (pass123) or add google-services.json.",
-            )
-            val firebaseStore = firestore ?: throw IllegalStateException(
-                "Firebase firestore not configured. Use demo login (pass123) or add google-services.json.",
-            )
+            val firebaseAuth = auth ?: throw IllegalStateException(firebaseMissingMessage("auth"))
+            val firebaseStore = firestore ?: throw IllegalStateException(firebaseMissingMessage("firestore"))
 
             val email = "${loginCode.lowercase()}@schoolapp.local"
             val authResult = firebaseAuth.signInWithEmailAndPassword(email, password).await()
             val firebaseUser = authResult.user ?: error("Authentication failed")
-            val uid = firebaseUser.uid
+            try {
+                val uid = firebaseUser.uid
 
-            // The token's schoolId claim says which school this account belongs to.
-            val claims = firebaseUser.getIdToken(false).await().claims
-            val schoolId = SchoolScope.schoolIdForSignIn(claims)
+                // The token's schoolId claim says which school this account belongs to.
+                val claims = firebaseUser.getIdToken(false).await().claims
+                val schoolId = SchoolScope.schoolIdForSignIn(claims)
 
-            val profile = firebaseStore.collection("schools")
-                .document(schoolId)
-                .collection("users")
-                .document(uid)
-                .get()
-                .await()
-            check(profile.exists()) { "No profile found for this account in its school" }
+                val profile = firebaseStore.collection("schools")
+                    .document(schoolId)
+                    .collection("users")
+                    .document(uid)
+                    .get()
+                    .await()
+                check(profile.exists()) { "No profile found for this account in its school" }
 
-            val user = SchoolUser(
-                uid = uid,
-                schoolId = schoolId,
-                role = UserRole.valueOf(profile.getString("role") ?: UserRole.TEACHER.name),
-                displayName = profile.getString("displayName") ?: "User",
-                code = profile.getString("code") ?: loginCode,
-                active = profile.getBoolean("active") ?: true,
-            )
-            db.userDao().upsert(user.toEntity())
-            sessionStore.saveUserId(uid)
+                val user = SchoolUser(
+                    uid = uid,
+                    schoolId = schoolId,
+                    role = UserRole.valueOf(profile.getString("role") ?: UserRole.TEACHER.name),
+                    displayName = profile.getString("displayName") ?: "User",
+                    code = profile.getString("code") ?: loginCode,
+                    active = profile.getBoolean("active") ?: true,
+                )
+                localData.withLock {
+                    // Another account's local data goes before this account sees anything.
+                    localData.claimForLocked(uid, discardOtherAccountsUnsyncedMarks)
+                    db.userDao().upsert(user.toEntity())
+                    sessionStore.saveUserId(uid)
+                }
+                user
+            } catch (e: Throwable) {
+                // Firebase stays signed in only together with an app session.
+                firebaseAuth.signOut()
+                throw e
+            }
+        }
+    }
+
+    private suspend fun signInDemo(demoUid: String, discardOtherAccountsUnsyncedMarks: Boolean): SchoolUser {
+        // A demo session has no Firebase identity, so nothing done in it is uploaded as anyone.
+        auth?.signOut()
+        return localData.withLock {
+            localData.claimForLocked(LocalDataPolicy.DEMO_OWNER, discardOtherAccountsUnsyncedMarks)
+            localData.seedDemoIfFreeLocked()
+            val user = db.userDao().getByUid(demoUid)?.takeIf { it.active }?.toDomain()
+                ?: error("Demo account not found")
+            sessionStore.saveUserId(demoUid)
             user
         }
     }
 
-    override suspend fun signOut() {
-        withContext(Dispatchers.IO) {
-            auth?.signOut()
-            sessionStore.clear()
+    private fun firebaseMissingMessage(service: String): String =
+        if (demoLoginEnabled) {
+            "Firebase $service not configured. Use a demo login or add google-services.json."
+        } else {
+            "Sign-in is unavailable: Firebase $service is not configured."
         }
+
+    override suspend fun signOut(unsyncedMarks: UnsyncedMarksChoice): SignOutResult {
+        return withContext(Dispatchers.IO) {
+            localData.withLock {
+                val owner = sessionStore.getDataOwner()
+                val stillUnsynced = when {
+                    owner == LocalDataPolicy.DEMO_OWNER -> 0
+                    // Already asked after a failed upload: don't make them wait for another one.
+                    unsyncedMarks != UnsyncedMarksChoice.ASK -> db.scoreDao().countUnsynced()
+                    else -> uploadUnsyncedMarksBeforeSignOut()
+                }
+                when (val action = LocalDataPolicy.onSignOut(owner, stillUnsynced, unsyncedMarks)) {
+                    is LocalDataPolicy.SignOutAction.AskUser ->
+                        return@withLock SignOutResult.UnsyncedMarks(action.unsyncedMarks)
+                    LocalDataPolicy.SignOutAction.ClearAndSignOut -> localData.clearLocked()
+                    // Stays recorded as this account's: only it gets the data back on its next sign-in.
+                    LocalDataPolicy.SignOutAction.SignOutKeepData -> Unit
+                }
+                auth?.signOut()
+                sessionStore.clear()
+                // Demo builds: fresh demo data for the next demo login.
+                localData.seedDemoIfFreeLocked()
+                SignOutResult.SignedOut
+            }
+        }
+    }
+
+    /**
+     * One last upload of this account's marks while it is still signed in. Returns how many are
+     * still not uploaded (offline, refused, timed out, or not this account's to upload).
+     */
+    private suspend fun uploadUnsyncedMarksBeforeSignOut(): Int {
+        val pending = db.scoreDao().countUnsynced()
+        if (pending == 0) return 0
+        val remote = firestore ?: return pending
+        val uid = sessionStore.getUserId() ?: return pending
+        val schoolId = uploadSchoolIdOrNull(db, sessionStore, auth) ?: return pending
+        // A Firestore write waits for the server, which never answers while offline.
+        withTimeoutOrNull(FINAL_UPLOAD_TIMEOUT_MS) {
+            ScoreUploader.uploadUnsynced(db, remote, schoolId) { auth?.currentUser?.uid == uid }
+        }
+        return db.scoreDao().countUnsynced()
     }
 
     override suspend fun currentUser(): SchoolUser? {
         return withContext(Dispatchers.IO) {
-            val uid = sessionStore.getUserId() ?: auth?.currentUser?.uid ?: return@withContext null
+            val uid = sessionStore.getUserId() ?: return@withContext null
+            val kind = LocalDataPolicy.sessionKind(uid, auth?.currentUser?.uid, demoLoginEnabled)
+            if (kind == LocalDataPolicy.SessionKind.NONE) return@withContext null
             db.userDao().getByUid(uid)?.toDomain()
         }
     }
@@ -305,12 +327,17 @@ private class AuthRepositoryImpl(
 
     private suspend fun currentSchoolId(): String =
         SchoolScope.requireSessionSchoolId(storedSessionSchoolId(db, sessionStore))
+
+    private companion object {
+        const val FINAL_UPLOAD_TIMEOUT_MS = 15_000L
+    }
 }
 
 private class MasterDataRepositoryImpl(
     private val db: SchoolDatabase,
     private val firestore: FirebaseFirestore?,
     private val sessionStore: SessionStore,
+    private val auth: FirebaseAuth?,
 ) : MasterDataRepository {
 
     override suspend fun upsertSection(section: GradeSection) {
@@ -493,7 +520,8 @@ private class MasterDataRepositoryImpl(
     private suspend fun syncDoc(collection: String, id: String, payload: Map<String, Any>) {
         runCatching {
             val remote = firestore ?: return@runCatching
-            val schoolId = currentSchoolId()
+            // Only as the signed-in account that owns the local data (never for demo data).
+            val schoolId = uploadSchoolIdOrNull(db, sessionStore, auth) ?: return@runCatching
             remote.collection("schools")
                 .document(schoolId)
                 .collection(collection)
@@ -506,7 +534,7 @@ private class MasterDataRepositoryImpl(
     private suspend fun deleteDoc(collection: String, id: String) {
         runCatching {
             val remote = firestore ?: return@runCatching
-            val schoolId = currentSchoolId()
+            val schoolId = uploadSchoolIdOrNull(db, sessionStore, auth) ?: return@runCatching
             remote.collection("schools")
                 .document(schoolId)
                 .collection(collection)
@@ -526,6 +554,7 @@ private class MarksRepositoryImpl(
     private val functions: FirebaseFunctions?,
     private val storage: FirebaseStorage?,
     private val sessionStore: SessionStore,
+    private val auth: FirebaseAuth?,
 ) : MarksRepository {
 
     override suspend fun upsertScore(score: ScoreEntry) {
@@ -535,13 +564,16 @@ private class MarksRepositoryImpl(
             val canonicalScore = score.copy(scoreId = canonicalId)
             db.scoreDao().upsert(canonicalScore.toEntity(synced = false))
             db.scoreDao().deleteDuplicates(score.assessmentId, score.studentId, canonicalId)
-            if (firestore == null) {
+            if (firestore == null || sessionStore.getDataOwner() == LocalDataPolicy.DEMO_OWNER) {
+                // Nothing to upload: no cloud configured, or demo data, which never leaves the device.
                 db.scoreDao().markSynced(canonicalId)
                 return@withContext
             }
+            // Uploaded only as the account that owns the local marks; otherwise it stays
+            // unsynced for that account (sync worker, or the final upload at sign-out).
+            val schoolId = uploadSchoolIdOrNull(db, sessionStore, auth) ?: return@withContext
             runCatching {
                 val remote = firestore
-                val schoolId = currentSchoolId()
                 remote.collection("schools")
                     .document(schoolId)
                     .collection("scores")

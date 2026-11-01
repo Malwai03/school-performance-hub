@@ -17,7 +17,7 @@ class SchoolApplication : Application(), Configuration.Provider {
         super.onCreate()
         container = AppContainer(this)
         CoroutineScope(Dispatchers.IO).launch {
-            container.seedDemoDataIfNeeded()
+            container.prepareLocalData()
         }
         ScoreSyncWorker.schedule(this)
     }

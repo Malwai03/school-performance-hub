@@ -19,11 +19,15 @@ Role-based student performance app for grades 1-10 with offline-first Android cl
 1. Open project in Android Studio (Hedgehog+).
 2. Build and run app for local demo mode (offline/local-first works without Firebase config).
 3. For cloud sync/auth, add `app/google-services.json` and Firebase project settings.
-4. Demo login codes:
+4. Demo login codes (debug builds only; release builds sign every account in through Firebase Auth):
    - `admin001`
    - `teacher001`
    - `student001`
    - password for demo users: `pass123`
+5. Signing out first tries to upload any marks not yet synced, then deletes that account's local
+   data from the device. If marks still cannot be uploaded (for example offline), the app asks:
+   stay signed in, sign out but keep them on the device (only the same account gets them back and
+   uploads them; anyone else signing in is asked before they are deleted), or delete them.
 
 ### Firebase Functions
 ```bash

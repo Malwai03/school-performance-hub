@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -28,6 +29,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +43,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.schoolapp.BuildConfig
+import com.schoolapp.core.logic.DemoLogin
 import com.schoolapp.core.ui.theme.Background
 import com.schoolapp.core.ui.theme.Primary
 import com.schoolapp.core.ui.theme.PrimaryContainer
@@ -61,6 +65,28 @@ fun LoginScreen(
         val user = state.user ?: return@LaunchedEffect
         onNavigateByRole(viewModel.routeForRole(user.role))
         viewModel.consumeUserNavigation()
+    }
+
+    state.otherAccountUnsyncedMarks?.let { count ->
+        AlertDialog(
+            onDismissRequest = viewModel::cancelDiscardOtherAccountMarks,
+            title = { Text("Marks not uploaded") },
+            text = {
+                Text(
+                    "This device still has $count marks from another account that never reached " +
+                        "the school server. They upload when that account signs in here again. " +
+                        "Signing in with a different account deletes them.",
+                )
+            },
+            confirmButton = {
+                Button(onClick = viewModel::cancelDiscardOtherAccountMarks) { Text("Cancel") }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::confirmDiscardOtherAccountMarks) {
+                    Text("Delete them and sign in", color = MaterialTheme.colorScheme.error)
+                }
+            },
+        )
     }
 
     Box(
@@ -159,12 +185,15 @@ fun LoginScreen(
                     }
                 }
 
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    "Demo: admin001 / teacher001 / student001 | pass123",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary,
-                )
+                if (BuildConfig.DEMO_LOGIN_ENABLED) {
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "Demo: ${DemoLogin.ADMIN_CODE} / ${DemoLogin.TEACHER_CODE} / " +
+                            "${DemoLogin.STUDENT_CODE} | ${DemoLogin.PASSWORD}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary,
+                    )
+                }
             }
         }
     }

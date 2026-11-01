@@ -1,5 +1,6 @@
 package com.schoolapp.domain.repository
 
+import com.schoolapp.core.logic.UnsyncedMarksChoice
 import com.schoolapp.core.model.Assessment
 import com.schoolapp.core.model.AssessmentCycle
 import com.schoolapp.core.model.BulkScorePatch
@@ -14,9 +15,46 @@ import com.schoolapp.core.model.Student
 import com.schoolapp.core.model.Subject
 import com.schoolapp.core.model.UserRole
 
+/**
+ * Marks entered on this device have not reached the server, so going ahead would delete them.
+ * [fromAnotherAccount]: they belong to an account other than the one signing in.
+ */
+class UnsyncedMarksException(
+    val unsyncedMarks: Int,
+    val fromAnotherAccount: Boolean,
+) : IllegalStateException(
+    if (fromAnotherAccount) {
+        "This device has $unsyncedMarks marks from another account that were never uploaded."
+    } else {
+        "$unsyncedMarks marks have not been uploaded yet."
+    },
+)
+
+sealed interface SignOutResult {
+    data object SignedOut : SignOutResult
+
+    /** Still signed in: these marks could not be uploaded. Ask the user, then call again with their choice. */
+    data class UnsyncedMarks(val count: Int) : SignOutResult
+}
+
 interface AuthRepository {
-    suspend fun signIn(loginCode: String, password: String): SchoolUser
-    suspend fun signOut()
+    /**
+     * Signs in and makes the local data belong to this account. If the device still holds
+     * another account's unsynced marks this throws [UnsyncedMarksException] and signs nobody in,
+     * unless [discardOtherAccountsUnsyncedMarks].
+     */
+    suspend fun signIn(
+        loginCode: String,
+        password: String,
+        discardOtherAccountsUnsyncedMarks: Boolean = false,
+    ): SchoolUser
+
+    /**
+     * Uploads this account's unsynced marks one last time, then deletes its local data and signs
+     * out. If marks are still not uploaded, stays signed in and returns
+     * [SignOutResult.UnsyncedMarks]; the user's answer comes back as [unsyncedMarks].
+     */
+    suspend fun signOut(unsyncedMarks: UnsyncedMarksChoice = UnsyncedMarksChoice.ASK): SignOutResult
     suspend fun currentUser(): SchoolUser?
     suspend fun changePassword(currentPassword: String, newPassword: String)
     suspend fun createManagedAccount(
