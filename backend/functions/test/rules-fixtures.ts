@@ -41,6 +41,25 @@ export async function seedSchool(env: RulesTestEnvironment) {
     put("resultSnapshots/draft-own", { studentId: "student-1", cycleId: "draft" });
     put("resultSnapshots/missing-cycle", { studentId: "student-1", cycleId: "absent" });
     put("resultSnapshots/other", { studentId: "student-2", cycleId: "published" });
+
+    // Student accounts as createManagedUserAccount writes them: the auth uid is the student id and the
+    // profile links the student through linkedStudentId (there is no studentId field).
+    const backendStudent = (uid: string, linkedStudentId: string | null) => ({
+      uid, schoolId: SCHOOL, role: "STUDENT", displayName: `Student ${uid}`, code: `${uid}-code`,
+      active: true, mustChangePassword: true, linkedStudentId, sectionId: "g1_a",
+    });
+    put("users/student-x", backendStudent("student-x", "student-x"));
+    // Same link under a uid that is not the student id, so the linkedStudentId match is tested on its own.
+    put("users/student-x-login", backendStudent("student-x-login", "student-x"));
+    put("users/unlinked-student", backendStudent("unlinked-student", null));
+    put("students/student-x", { studentId: "student-x", sectionId: "g1_a", authUid: "student-x" });
+    put("scores/x-own", { scoreId: "x-own", assessmentId: "math", studentId: "student-x", obtainedMarks: 70 });
+    put("scores/no-student", { scoreId: "no-student", assessmentId: "math", studentId: null, obtainedMarks: 0 });
+    put("resultSnapshots/x-published", { studentId: "student-x", cycleId: "published" });
+    put("resultSnapshots/x-draft", { studentId: "student-x", cycleId: "draft" });
+    put("resultSnapshots/x-missing-cycle", { studentId: "student-x", cycleId: "absent" });
+    put("resultSnapshots/no-student", { studentId: null, cycleId: "published" });
+    put("scores/x-elsewhere", { scoreId: "x-elsewhere", assessmentId: "math", studentId: "student-x" }, OTHER_SCHOOL);
     await batch.commit();
   });
 }

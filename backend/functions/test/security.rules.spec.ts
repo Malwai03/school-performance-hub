@@ -103,6 +103,54 @@ describe("firestore security rules", () => {
       .firestore().doc(`schools/${SCHOOL}/resultSnapshots/published-own`).get());
   });
 
+  // Profiles written by createManagedUserAccount: { role: "STUDENT", linkedStudentId: "student-x", ... }.
+  describe.each(["student-x", "student-x-login"])("backend-shaped student profile %s (linkedStudentId)", (uid) => {
+    const studentDb = () => env.authenticatedContext(uid).firestore();
+
+    test("can read its own student record, scores and published result", async () => {
+      const db = studentDb();
+      await assertSucceeds(db.doc(`schools/${SCHOOL}/students/student-x`).get());
+      await assertSucceeds(db.doc(`schools/${SCHOOL}/scores/x-own`).get());
+      await assertSucceeds(db.doc(`schools/${SCHOOL}/resultSnapshots/x-published`).get());
+    });
+
+    test("can query only its own scores", async () => {
+      const scores = studentDb().collection(`schools/${SCHOOL}/scores`);
+      const own = await assertSucceeds(scores.where("studentId", "==", "student-x").get());
+      expect(own.docs.map((doc) => doc.id)).toEqual(["x-own"]);
+      await assertFails(scores.where("studentId", "==", "student-1").get());
+      await assertFails(scores.get());
+    });
+
+    test.each(["students/student-1", "students/student-2", "scores/own", "scores/other",
+      "resultSnapshots/published-own", "resultSnapshots/other"])("cannot read another student's %s", async (doc) => {
+      await assertFails(studentDb().doc(`schools/${SCHOOL}/${doc}`).get());
+    });
+
+    test.each(["x-draft", "x-missing-cycle"])('cannot read its own unpublished result "%s"', async (id) => {
+      await assertFails(studentDb().doc(`schools/${SCHOOL}/resultSnapshots/${id}`).get());
+    });
+
+    test("cannot read its own student id's score in another school", async () => {
+      await assertFails(studentDb().doc(`schools/${OTHER_SCHOOL}/scores/x-elsewhere`).get());
+    });
+
+    test("cannot write its own score or result", async () => {
+      const db = studentDb();
+      await assertFails(db.doc(`schools/${SCHOOL}/scores/x-own`).update({ obtainedMarks: 100 }));
+      await assertFails(db.doc(`schools/${SCHOOL}/resultSnapshots/x-published`).update({ overallPercentage: 100 }));
+    });
+  });
+
+  test.each(["scores/no-student", "resultSnapshots/no-student", "scores/x-own", "students/student-x"])(
+    "student profile with no linked student cannot read %s", async (doc) => {
+      await assertFails(env.authenticatedContext("unlinked-student").firestore().doc(`schools/${SCHOOL}/${doc}`).get());
+    });
+
+  test.each(["scores/no-student", "resultSnapshots/no-student"])("legacy studentId profile cannot read %s", async (doc) => {
+    await assertFails(env.authenticatedContext("student-uid").firestore().doc(`schools/${SCHOOL}/${doc}`).get());
+  });
+
   test.each(["admin-uid", "teacher-uid", "student-uid"])("%s cannot create, update or delete backend results", async (uid) => {
     const db = env.authenticatedContext(uid).firestore();
     const results = db.collection(`schools/${SCHOOL}/resultSnapshots`);

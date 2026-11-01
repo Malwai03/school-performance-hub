@@ -30,9 +30,13 @@ service cloud.firestore {
       return hasUserRecord(schoolId) && userData(schoolId).role == "STUDENT";
     }
 
+    // createManagedUserAccount links a student profile through linkedStudentId and uses the
+    // student id as the auth uid; older profiles carry studentId. A blank or missing id never matches.
     function isStudentSelf(schoolId, studentId) {
-      return isStudent(schoolId) && (
-        userData(schoolId).studentId == studentId || request.auth.uid == studentId
+      return isStudent(schoolId) && studentId is string && studentId.size() > 0 && (
+        userData(schoolId).get("linkedStudentId", null) == studentId ||
+        userData(schoolId).get("studentId", null) == studentId ||
+        request.auth.uid == studentId
       );
     }
 
@@ -120,9 +124,8 @@ service cloud.firestore {
       }
 
       match /scores/{scoreId} {
-        allow read: if isAdmin(schoolId) || isTeacher(schoolId) || (
-          isStudent(schoolId) && resource.data.studentId == userData(schoolId).studentId
-        );
+        allow read: if isAdmin(schoolId) || isTeacher(schoolId) ||
+          isStudentSelf(schoolId, resource.data.studentId);
 
         allow create: if canWriteScore(schoolId, scoreId);
 
@@ -137,7 +140,7 @@ service cloud.firestore {
 
       match /resultSnapshots/{snapshotId} {
         allow read: if isAdmin(schoolId) || isTeacher(schoolId) || (
-          isStudent(schoolId) && resource.data.studentId == userData(schoolId).studentId &&
+          isStudentSelf(schoolId, resource.data.studentId) &&
           get(/databases/$(database)/documents/schools/$(schoolId)/assessmentCycles/$(resource.data.cycleId)).data.published == true
         );
         allow create, update, delete: if false;
