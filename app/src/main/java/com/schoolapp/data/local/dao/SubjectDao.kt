@@ -19,4 +19,25 @@ interface SubjectDao {
 
     @Query("DELETE FROM subjects WHERE subjectId = :subjectId")
     suspend fun deleteById(subjectId: String)
+
+    // Inbound sync (data/sync/RoomInboundLocal). Ids compare with SQLite's BINARY collation,
+    // the same byte order Firestore uses for document ids.
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(rows: List<SubjectEntity>)
+
+    @Query("SELECT * FROM subjects")
+    suspend fun getAllRows(): List<SubjectEntity>
+
+    @Query("SELECT * FROM subjects WHERE subjectId IN (:ids)")
+    suspend fun getByIds(ids: List<String>): List<SubjectEntity>
+
+    @Query(
+        "SELECT * FROM subjects WHERE (:afterId IS NULL OR subjectId > :afterId) " +
+            "AND (:throughId IS NULL OR subjectId <= :throughId)",
+    )
+    suspend fun getInIdRange(afterId: String?, throughId: String?): List<SubjectEntity>
+
+    @Query("DELETE FROM subjects WHERE subjectId IN (:ids)")
+    suspend fun deleteAllByIds(ids: List<String>)
 }

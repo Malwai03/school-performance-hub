@@ -7,6 +7,10 @@ import com.schoolapp.core.model.ResultSnapshot
 import com.schoolapp.domain.repository.AnalyticsRepository
 import com.schoolapp.domain.repository.AuthRepository
 import com.schoolapp.domain.repository.MasterDataRepository
+import com.schoolapp.domain.repository.SyncRepository
+import com.schoolapp.domain.repository.SyncTrigger
+import com.schoolapp.ui.common.changedLocalData
+import com.schoolapp.ui.common.syncNoticeFor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,19 +29,39 @@ data class StudentDashboardState(
     /** The server could not be asked for results just now: these are the saved ones. */
     val resultsMayBeOutdated: Boolean = false,
     val error: String? = null,
+    /** A download from the school server is running (pull-to-refresh indicator). */
+    val syncing: Boolean = false,
+    /** Why the class details on screen may not be the server's latest, if they may not be. */
+    val syncNotice: String? = null,
 )
 
 class StudentViewModel(
     private val authRepository: AuthRepository,
     private val analyticsRepository: AnalyticsRepository,
     private val masterDataRepository: MasterDataRepository,
+    private val syncRepository: SyncRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(StudentDashboardState())
     val uiState: StateFlow<StudentDashboardState> = _uiState.asStateFlow()
 
     init {
+        // Results are checked with the server on every load (getStudentTrend); the class
+        // details (section, subjects, cycles) come with the download.
         refresh()
+        sync(SyncTrigger.APP_OPEN)
+    }
+
+    /** Pull-to-refresh and the refresh button: download from the school server, then reload. */
+    fun pullToRefresh() = sync(SyncTrigger.MANUAL)
+
+    private fun sync(trigger: SyncTrigger) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(syncing = true)
+            val report = syncRepository.syncNow(trigger)
+            _uiState.value = _uiState.value.copy(syncing = false, syncNotice = syncNoticeFor(report))
+            if (report.changedLocalData) refresh()
+        }
     }
 
     fun selectTab(tab: Int) {
@@ -97,7 +121,9 @@ class StudentViewModel(
                     cycleName = cycleName,
                     resultsMayBeOutdated = studentTrend.serverUnreachable,
                 )
-            }.onSuccess { _uiState.value = it }
+            }.onSuccess {
+                _uiState.value = it.copy(syncing = _uiState.value.syncing, syncNotice = _uiState.value.syncNotice)
+            }
                 .onFailure { error -> _uiState.value = _uiState.value.copy(loading = false, error = error.message) }
         }
     }
@@ -107,11 +133,12 @@ class StudentViewModel(
             authRepository: AuthRepository,
             analyticsRepository: AnalyticsRepository,
             masterDataRepository: MasterDataRepository,
+            syncRepository: SyncRepository,
         ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return StudentViewModel(authRepository, analyticsRepository, masterDataRepository) as T
+                    return StudentViewModel(authRepository, analyticsRepository, masterDataRepository, syncRepository) as T
                 }
             }
     }

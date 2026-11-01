@@ -21,6 +21,7 @@ import com.schoolapp.ui.admin.dashboard.AdminDashboardScreen
 import com.schoolapp.ui.admin.gradebook.GradebookScreen
 import com.schoolapp.ui.admin.profile.AdminProfileScreen
 import com.schoolapp.ui.admin.roster.RosterScreen
+import com.schoolapp.ui.common.SyncRefreshBox
 
 @Composable
 fun AdminRootScreen(
@@ -69,31 +70,35 @@ fun AdminRootScreen(
             }
         },
     ) { padding ->
-        when (state.destination) {
-            AdminDestination.DASHBOARD -> AdminDashboardScreen(
-                state = state,
-                viewModel = viewModel,
-                modifier = Modifier.padding(padding),
-            )
+        // Pull down on any admin tab to download the school's latest data.
+        SyncRefreshBox(
+            syncing = state.syncing,
+            notice = state.syncNotice,
+            onRefresh = viewModel::pullToRefresh,
+            modifier = Modifier.padding(padding),
+        ) {
+            when (state.destination) {
+                AdminDestination.DASHBOARD -> AdminDashboardScreen(
+                    state = state,
+                    viewModel = viewModel,
+                )
 
-            AdminDestination.ROSTER -> RosterScreen(
-                state = state,
-                viewModel = viewModel,
-                modifier = Modifier.padding(padding),
-            )
+                AdminDestination.ROSTER -> RosterScreen(
+                    state = state,
+                    viewModel = viewModel,
+                )
 
-            AdminDestination.GRADEBOOK -> GradebookScreen(
-                state = state,
-                viewModel = viewModel,
-                modifier = Modifier.padding(padding),
-            )
+                AdminDestination.GRADEBOOK -> GradebookScreen(
+                    state = state,
+                    viewModel = viewModel,
+                )
 
-            AdminDestination.SETUP -> AdminProfileScreen(
-                state = state,
-                viewModel = viewModel,
-                onLogout = onLogout,
-                modifier = Modifier.padding(padding),
-            )
+                AdminDestination.SETUP -> AdminProfileScreen(
+                    state = state,
+                    viewModel = viewModel,
+                    onLogout = onLogout,
+                )
+            }
         }
     }
 }

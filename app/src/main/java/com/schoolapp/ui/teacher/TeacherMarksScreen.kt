@@ -54,6 +54,7 @@ import com.schoolapp.core.ui.theme.SurfaceBackground
 import com.schoolapp.core.ui.theme.SurfaceWhite
 import com.schoolapp.core.ui.theme.TextPrimary
 import com.schoolapp.core.ui.theme.TextSecondary
+import com.schoolapp.ui.common.SyncRefreshBox
 
 @Composable
 fun TeacherMarksScreen(
@@ -102,7 +103,7 @@ fun TeacherMarksScreen(
             AppTopBar(
                 title = "Teacher Gradebook",
                 actions = {
-                    IconButton(onClick = viewModel::refresh) {
+                    IconButton(onClick = viewModel::pullToRefresh) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Refresh", tint = TextSecondary)
                     }
                     IconButton(onClick = onLogout) {
@@ -112,142 +113,147 @@ fun TeacherMarksScreen(
             )
         },
     ) { padding ->
-        if (state.loading) {
+        SyncRefreshBox(
+            syncing = state.syncing,
+            notice = state.syncNotice,
+            onRefresh = viewModel::pullToRefresh,
+            modifier = Modifier.padding(padding),
+        ) {
+            if (state.loading) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("Loading gradebook...", style = MaterialTheme.typography.titleMedium, color = TextSecondary)
+                }
+                return@SyncRefreshBox
+            }
+
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
+                    .background(SurfaceBackground),
             ) {
-                Text("Loading gradebook...", style = MaterialTheme.typography.titleMedium, color = TextSecondary)
-            }
-            return@Scaffold
-        }
+                ContextSelectorBar(
+                    sections = state.sections,
+                    cycles = state.cycles,
+                    subjectsBySection = subjectsBySection,
+                    assessmentsBySection = assessmentsBySection,
+                    context = context,
+                    onGradeSelected = { grade ->
+                        state.sections.firstOrNull { it.grade == grade }?.let { viewModel.selectSection(it.sectionId) }
+                    },
+                    onSectionSelected = viewModel::selectSection,
+                    onCycleSelected = viewModel::selectCycle,
+                    onSubjectSelected = viewModel::selectSubject,
+                    onAssessmentSelected = viewModel::selectAssessment,
+                )
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .background(SurfaceBackground),
-        ) {
-            ContextSelectorBar(
-                sections = state.sections,
-                cycles = state.cycles,
-                subjectsBySection = subjectsBySection,
-                assessmentsBySection = assessmentsBySection,
-                context = context,
-                onGradeSelected = { grade ->
-                    state.sections.firstOrNull { it.grade == grade }?.let { viewModel.selectSection(it.sectionId) }
-                },
-                onSectionSelected = viewModel::selectSection,
-                onCycleSelected = viewModel::selectCycle,
-                onSubjectSelected = viewModel::selectSubject,
-                onAssessmentSelected = viewModel::selectAssessment,
-            )
-
-            Surface(color = SurfaceWhite, modifier = Modifier.fillMaxWidth(), shadowElevation = 2.dp) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
+                Surface(color = SurfaceWhite, modifier = Modifier.fillMaxWidth(), shadowElevation = 2.dp) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { viewModel.applyBulkStatus(ScoreStatus.PRESENT) }) {
-                                Text("All Present", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(onClick = { viewModel.applyBulkStatus(ScoreStatus.PRESENT) }) {
+                                    Text("All Present", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                                OutlinedButton(onClick = { viewModel.applyBulkStatus(ScoreStatus.ABSENT) }) {
+                                    Text("All Absent", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
-                            OutlinedButton(onClick = { viewModel.applyBulkStatus(ScoreStatus.ABSENT) }) {
-                                Text("All Absent", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Box(
+                                modifier = Modifier
+                                    .background(SurfaceBackground, RoundedCornerShape(8.dp))
+                                    .border(1.dp, BorderGray, RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                            ) {
+                                Text(
+                                    "Max: ${state.maxMarks?.let { "%.0f".format(it) } ?: "-"}",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextPrimary,
+                                )
                             }
                         }
-                        Box(
-                            modifier = Modifier
-                                .background(SurfaceBackground, RoundedCornerShape(8.dp))
-                                .border(1.dp, BorderGray, RoundedCornerShape(8.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                        ) {
-                            Text(
-                                "Max: ${state.maxMarks?.let { "%.0f".format(it) } ?: "-"}",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TextPrimary,
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = bulkMarks,
+                                onValueChange = { bulkMarks = it.filter { c -> c.isDigit() || c == '.' } },
+                                placeholder = { Text("Apply marks to all present...") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            )
+                            Button(
+                                onClick = { viewModel.applyBulkMarks(bulkMarks) },
+                                colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
+                            ) {
+                                Text("Apply", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    if (rows.isEmpty()) {
+                        item {
+                            EmptyStateCard(
+                                title = "No marks rows",
+                                description = "Select section/cycle/subject/assessment to load students.",
+                            )
+                        }
+                    } else {
+                        item {
+                            MarksEntryTable(
+                                rows = rows,
+                                onStatusToggle = viewModel::toggleStudentStatus,
+                                onMarksChange = viewModel::onScoreChange,
+                                dense = true,
                             )
                         }
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            value = bulkMarks,
-                            onValueChange = { bulkMarks = it.filter { c -> c.isDigit() || c == '.' } },
-                            placeholder = { Text("Apply marks to all present...") },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        )
-                        Button(
-                            onClick = { viewModel.applyBulkMarks(bulkMarks) },
-                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryBlue),
-                        ) {
-                            Text("Apply", fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                if (rows.isEmpty()) {
                     item {
-                        EmptyStateCard(
-                            title = "No marks rows",
-                            description = "Select section/cycle/subject/assessment to load students.",
-                        )
-                    }
-                } else {
-                    item {
-                        MarksEntryTable(
-                            rows = rows,
-                            onStatusToggle = viewModel::toggleStudentStatus,
-                            onMarksChange = viewModel::onScoreChange,
-                            dense = true,
-                        )
-                    }
-                }
-
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        Button(
-                            onClick = viewModel::saveScores,
-                            enabled = !state.saving && state.selectedAssessmentId != null,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(if (state.saving) "Saving..." else "Save Draft")
-                        }
-                        Button(
-                            onClick = viewModel::requestPublish,
-                            enabled = state.selectedCycleId != null && state.selectedSectionId != null,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text("Publish")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                            Button(
+                                onClick = viewModel::saveScores,
+                                enabled = !state.saving && state.selectedAssessmentId != null,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(if (state.saving) "Saving..." else "Save Draft")
+                            }
+                            Button(
+                                onClick = viewModel::requestPublish,
+                                enabled = state.selectedCycleId != null && state.selectedSectionId != null,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text("Publish")
+                            }
                         }
                     }
-                }
 
-                state.error?.let { message ->
-                    item { Text(message, style = MaterialTheme.typography.bodySmall, color = DangerRed) }
-                }
-                state.info?.let { message ->
-                    item { Text(message, style = MaterialTheme.typography.bodySmall, color = SuccessGreen) }
+                    state.error?.let { message ->
+                        item { Text(message, style = MaterialTheme.typography.bodySmall, color = DangerRed) }
+                    }
+                    state.info?.let { message ->
+                        item { Text(message, style = MaterialTheme.typography.bodySmall, color = SuccessGreen) }
+                    }
                 }
             }
         }

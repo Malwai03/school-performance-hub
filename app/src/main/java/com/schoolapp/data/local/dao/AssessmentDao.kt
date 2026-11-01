@@ -31,4 +31,25 @@ interface AssessmentDao {
 
     @Query("DELETE FROM assessments WHERE subjectId = :subjectId")
     suspend fun deleteBySubject(subjectId: String)
+
+    // Inbound sync (data/sync/RoomInboundLocal). Ids compare with SQLite's BINARY collation,
+    // the same byte order Firestore uses for document ids.
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(rows: List<AssessmentEntity>)
+
+    @Query("SELECT * FROM assessments")
+    suspend fun getAllRows(): List<AssessmentEntity>
+
+    @Query("SELECT * FROM assessments WHERE assessmentId IN (:ids)")
+    suspend fun getByIds(ids: List<String>): List<AssessmentEntity>
+
+    @Query(
+        "SELECT * FROM assessments WHERE (:afterId IS NULL OR assessmentId > :afterId) " +
+            "AND (:throughId IS NULL OR assessmentId <= :throughId)",
+    )
+    suspend fun getInIdRange(afterId: String?, throughId: String?): List<AssessmentEntity>
+
+    @Query("DELETE FROM assessments WHERE assessmentId IN (:ids)")
+    suspend fun deleteAllByIds(ids: List<String>)
 }

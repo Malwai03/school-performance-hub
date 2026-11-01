@@ -112,3 +112,53 @@ interface AnalyticsRepository {
     suspend fun getStudentTrend(studentId: String): StudentTrend
     suspend fun getSectionSummary(cycleId: String, sectionId: String): SectionSummary
 }
+
+/** What started a download from the school server into this device. */
+enum class SyncTrigger {
+    /** A screen opened (including right after sign-in): skipped if a run finished in the last hour. */
+    APP_OPEN,
+
+    /** Pull-to-refresh, the refresh button, or right after an import: always runs. */
+    MANUAL,
+
+    /** The background WorkManager job. */
+    PERIODIC,
+}
+
+enum class SyncOutcome {
+    /** Everything this account downloads is now up to date. */
+    DONE,
+
+    /** Stopped at the per-run bound: the rest comes with the next run. */
+    PARTIAL,
+
+    /** A run finished recently enough (automatic trigger only). */
+    SKIPPED,
+
+    /** Nothing to download from: demo session, no Firebase, nobody signed in, or data owned by another account. */
+    UNAVAILABLE,
+
+    /** The server could not be reached or refused: what is on this device is kept. */
+    FAILED,
+
+    /** The account changed during the run, which stopped before writing anything for it. */
+    ACCOUNT_CHANGED,
+}
+
+data class SyncReport(
+    val outcome: SyncOutcome,
+    /** Rows stored from the server. */
+    val downloaded: Int = 0,
+    /** Synced rows removed because the server no longer has them (or they left this account's scope). */
+    val removed: Int = 0,
+    /** Server versions not applied because this device holds a newer, not yet uploaded change. */
+    val keptLocal: Int = 0,
+)
+
+/**
+ * Brings the signed-in account's share of its school (see core/logic/InboundScope) down from
+ * Firestore into the local database. Uploads stay with their own paths.
+ */
+interface SyncRepository {
+    suspend fun syncNow(trigger: SyncTrigger): SyncReport
+}
