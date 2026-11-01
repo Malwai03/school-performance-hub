@@ -7,6 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import com.schoolapp.data.local.dao.AssessmentCycleDao
 import com.schoolapp.data.local.dao.AssessmentDao
+import com.schoolapp.data.local.dao.LocalDataDao
 import com.schoolapp.data.local.dao.ResultSnapshotDao
 import com.schoolapp.data.local.dao.ScoreDao
 import com.schoolapp.data.local.dao.SectionDao
@@ -50,6 +51,7 @@ abstract class SchoolDatabase : RoomDatabase() {
     abstract fun scoreDao(): ScoreDao
     abstract fun resultSnapshotDao(): ResultSnapshotDao
     abstract fun teacherAssignmentDao(): TeacherAssignmentDao
+    abstract fun localDataDao(): LocalDataDao
 
     companion object {
         @Volatile

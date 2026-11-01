@@ -23,6 +23,9 @@ interface ScoreDao {
     @Query("SELECT * FROM scores WHERE synced = 0")
     suspend fun getUnsynced(): List<ScoreEntity>
 
+    @Query("SELECT COUNT(*) FROM scores WHERE synced = 0")
+    suspend fun countUnsynced(): Int
+
     @Query("DELETE FROM scores WHERE studentId = :studentId")
     suspend fun deleteByStudent(studentId: String)
 

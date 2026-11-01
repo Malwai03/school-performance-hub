@@ -20,9 +20,16 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // Offline demo login (bundled seed users, shared demo password). Never in release builds:
+        // real accounts always sign in through Firebase Auth.
+        buildConfigField("boolean", "DEMO_LOGIN_ENABLED", "false")
     }
 
     buildTypes {
+        debug {
+            buildConfigField("boolean", "DEMO_LOGIN_ENABLED", "true")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
@@ -43,6 +50,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {

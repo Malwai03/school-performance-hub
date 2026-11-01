@@ -6,12 +6,11 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.SetOptions
 import com.schoolapp.data.local.SchoolDatabase
 import com.schoolapp.data.repository.SessionStore
-import com.schoolapp.data.repository.storedSessionSchoolId
-import kotlinx.coroutines.tasks.await
+import com.schoolapp.data.repository.uploadSchoolIdOrNull
 import java.util.concurrent.TimeUnit
 
 class ScoreSyncWorker(
@@ -23,35 +22,18 @@ class ScoreSyncWorker(
         val db = SchoolDatabase.get(applicationContext)
         val firestore = runCatching { FirebaseFirestore.getInstance() }.getOrNull()
             ?: return Result.success()
+        val auth = runCatching { FirebaseAuth.getInstance() }.getOrNull()
+        val sessionStore = SessionStore(applicationContext)
 
-        // Scores go to the signed-in user's school. Nobody signed in: leave them for a later run.
-        val schoolId = storedSessionSchoolId(db, SessionStore(applicationContext))
-            ?: return Result.success()
+        // Marks are only uploaded as the account that owns them, to that account's school.
+        // Nobody signed in, a demo session, or someone else's data: leave them alone.
+        val schoolId = uploadSchoolIdOrNull(db, sessionStore, auth) ?: return Result.success()
+        val uid = sessionStore.getUserId() ?: return Result.success()
 
-        return runCatching {
-            val unsynced = db.scoreDao().getUnsynced()
-            unsynced.forEach { score ->
-                firestore.collection("schools")
-                    .document(schoolId)
-                    .collection("scores")
-                    .document(score.scoreId)
-                    .set(
-                        mapOf(
-                            "scoreId" to score.scoreId,
-                            "assessmentId" to score.assessmentId,
-                            "studentId" to score.studentId,
-                            "obtainedMarks" to score.obtainedMarks,
-                            "status" to score.status,
-                        ),
-                        SetOptions.merge(),
-                    )
-                    .await()
-                db.scoreDao().markSynced(score.scoreId)
-            }
-        }.fold(
-            onSuccess = { Result.success() },
-            onFailure = { Result.retry() },
-        )
+        val stillUnsynced = ScoreUploader.uploadUnsynced(db, firestore, schoolId) {
+            auth?.currentUser?.uid == uid
+        }
+        return if (stillUnsynced == 0) Result.success() else Result.retry()
     }
 
     companion object {
