@@ -1,13 +1,13 @@
 const path = require("node:path");
 
-// A green CI run must contain assertions from BOTH rule suites, with no skips.
+// A green CI run must contain assertions from every rule suite (security, storage, score), with no skips.
 class RulesReporter {
   onRunComplete(_contexts, results) {
     this.error = undefined;
     if (results.numPendingTests || results.numTodoTests || results.numPendingTestSuites) {
       this.error = new Error("Rules gate does not allow skipped suites, skipped tests or todo tests.");
     }
-    const expected = ["security.rules.spec.ts", "storage.rules.spec.ts"];
+    const expected = ["security.rules.spec.ts", "storage.rules.spec.ts", "score.rules.spec.ts"];
     for (const file of expected) {
       const suite = results.testResults.find((result) => path.basename(result.testFilePath) === file);
       const executed = suite ? suite.numPassingTests + suite.numFailingTests : 0;
