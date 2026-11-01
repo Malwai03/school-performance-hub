@@ -24,6 +24,8 @@ withEmulators("storage rules: imports are per school", () => {
       const db = ctx.firestore();
       await db.collection("schools").doc("school_a").collection("users").doc("admin-a").set({ role: "ADMIN" });
       await db.collection("schools").doc("school_b").collection("users").doc("admin-b").set({ role: "ADMIN" });
+      await db.collection("schools").doc("school_a").collection("users").doc("admin-on").set({ role: "ADMIN", active: true });
+      await db.collection("schools").doc("school_a").collection("users").doc("admin-off").set({ role: "ADMIN", active: false });
     });
   });
 
@@ -47,6 +49,16 @@ withEmulators("storage rules: imports are per school", () => {
     await assertFails(
       env.authenticatedContext("admin-a", { role: "ADMIN", schoolId: "school_a" }).storage().ref("imports/school_b/a.csv").getDownloadURL(),
     );
+  });
+
+  test("a deactivated admin cannot read or write the school's imports; an active one still can", async () => {
+    const claims = { role: "ADMIN", schoolId: "school_a" };
+    const file = "imports/school_a/roster.csv";
+    await assertSucceeds(upload("admin-on", claims, file));
+    await assertSucceeds(env.authenticatedContext("admin-on", claims).storage().ref(file).getDownloadURL());
+    // Same claims and ADMIN membership, but the record says active: false (as requireAdminForSchool refuses).
+    await assertFails(upload("admin-off", claims, file));
+    await assertFails(env.authenticatedContext("admin-off", claims).storage().ref(file).getDownloadURL());
   });
 
   test("non-admins and signed-out users are refused", async () => {
