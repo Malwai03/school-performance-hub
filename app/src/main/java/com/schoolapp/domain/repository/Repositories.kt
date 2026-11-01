@@ -13,6 +13,7 @@ import com.schoolapp.core.model.ScoreEntry
 import com.schoolapp.core.model.SectionSummary
 import com.schoolapp.core.model.Student
 import com.schoolapp.core.model.Subject
+import com.schoolapp.core.model.TeacherAssignment
 import com.schoolapp.core.model.UserRole
 
 /**
@@ -82,6 +83,7 @@ interface MasterDataRepository {
     suspend fun getStudentsBySection(sectionId: String): List<Student>
     suspend fun getCycles(): List<AssessmentCycle>
     suspend fun getAssessments(sectionId: String, cycleId: String): List<Assessment>
+    suspend fun getTeacherAssignments(teacherUid: String): List<TeacherAssignment>
 }
 
 interface MarksRepository {

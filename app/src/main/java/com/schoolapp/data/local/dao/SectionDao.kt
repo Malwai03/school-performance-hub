@@ -14,6 +14,9 @@ interface SectionDao {
     @Query("SELECT * FROM sections ORDER BY grade ASC, sectionName ASC")
     suspend fun getAll(): List<SectionEntity>
 
+    @Query("SELECT * FROM sections WHERE sectionId = :sectionId LIMIT 1")
+    suspend fun getById(sectionId: String): SectionEntity?
+
     @Query("DELETE FROM sections WHERE sectionId = :sectionId")
     suspend fun deleteById(sectionId: String)
 }

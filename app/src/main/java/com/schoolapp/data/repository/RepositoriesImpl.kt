@@ -32,6 +32,7 @@ import com.schoolapp.core.logic.GradingEngine
 import com.schoolapp.core.logic.GradingPolicy
 import com.schoolapp.core.logic.LocalDataPolicy
 import com.schoolapp.core.logic.SchoolScope
+import com.schoolapp.core.logic.TeacherScope
 import com.schoolapp.core.logic.UnsyncedMarksChoice
 import com.schoolapp.core.logic.TrendPoint
 import com.schoolapp.data.local.toJsonString
@@ -517,6 +518,12 @@ private class MasterDataRepositoryImpl(
         }
     }
 
+    override suspend fun getTeacherAssignments(teacherUid: String): List<TeacherAssignment> {
+        return withContext(Dispatchers.IO) {
+            db.teacherAssignmentDao().getByTeacher(teacherUid).map { it.toDomain() }
+        }
+    }
+
     private suspend fun syncDoc(collection: String, id: String, payload: Map<String, Any>) {
         runCatching {
             val remote = firestore ?: return@runCatching
@@ -559,6 +566,8 @@ private class MarksRepositoryImpl(
 
     override suspend fun upsertScore(score: ScoreEntry) {
         withContext(Dispatchers.IO) {
+            // Only marks this account may change: checked before anything is written or queued.
+            check(mayEditScore(score)) { TeacherScope.NOT_ASSIGNED_MESSAGE }
             val existing = db.scoreDao().getByAssessmentAndStudent(score.assessmentId, score.studentId)
             val canonicalId = existing.firstOrNull()?.scoreId ?: score.scoreId
             val canonicalScore = score.copy(scoreId = canonicalId)
@@ -578,6 +587,18 @@ private class MarksRepositoryImpl(
             // it stays unsynced for the worker (or the final upload at sign-out).
             ScoreUploader.uploadOne(db, firestore, schoolId, canonicalId) { auth?.currentUser?.uid == uid }
         }
+    }
+
+    private suspend fun mayEditScore(score: ScoreEntry): Boolean {
+        val user = sessionStore.getUserId()?.let { db.userDao().getByUid(it) }?.toDomain()
+        val assessment = db.assessmentDao().getById(score.assessmentId)?.toDomain()
+        return TeacherScope.mayEditScore(
+            user = user,
+            assessment = assessment,
+            assessmentSchoolId = assessment?.let { db.sectionDao().getById(it.sectionId) }?.schoolId,
+            studentSectionId = db.studentDao().getById(score.studentId)?.sectionId,
+            assignments = user?.let { db.teacherAssignmentDao().getByTeacher(it.uid) }.orEmpty().map { it.toDomain() },
+        )
     }
 
     override suspend fun upsertScoresBulk(patch: BulkScorePatch) {
