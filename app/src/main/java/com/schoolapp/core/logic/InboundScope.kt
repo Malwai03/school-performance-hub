@@ -89,6 +89,9 @@ data class RemoteQuery(
  * - ADMIN: the whole school. Every collection, unfiltered.
  * - TEACHER: their own assignments, and only the sections, subjects, students, assessments and
  *   marks those assignments cover, plus all cycles (needed to pick one). No result snapshots.
+ *   Assessments are asked for one subject at a time and marks a few assessments at a time, the
+ *   query shapes the teacher read rules can prove safe ([teacherAssessmentQueries],
+ *   [teacherScoreQueries]).
  * - STUDENT: their own student record, their section, its grade's subjects and all cycles. No
  *   raw marks (results are shown only once published) and no assessments. Their published
  *   results are checked with the server by AnalyticsRepository.getStudentTrend (ResultSync),
@@ -100,6 +103,13 @@ data class RemoteQuery(
 object InboundScope {
     /** Firestore's limit for an `in` filter. */
     const val MAX_IN_VALUES = 30
+
+    /**
+     * Assessment ids per teacher scores query. The rules check each id by reading its assessment
+     * (one access call per id, on top of two for the caller's profile), and Firestore allows 10
+     * access calls per query, so a chunk of [MAX_IN_VALUES] ids is refused as a whole.
+     */
+    const val MAX_SCORE_IDS_PER_QUERY = 8
 
     const val PHASES = 3
 
@@ -155,17 +165,42 @@ object InboundScope {
                     addAll(byIds(SyncCollection.SUBJECTS, subjectIds))
                     add(RemoteQuery(SyncCollection.CYCLES))
                     addAll(byFieldIn(SyncCollection.STUDENTS, "sectionId", sectionIds))
-                    addAll(byFieldIn(SyncCollection.ASSESSMENTS, "sectionId", sectionIds))
+                    addAll(teacherAssessmentQueries(own))
                 }
             }
-            2 -> {
-                val assessmentIds = TeacherScope.visibleAssessments(facts.assessments, own)
-                    .map { it.assessmentId }.distinct().sorted()
-                byFieldIn(SyncCollection.SCORES, "assessmentId", assessmentIds)
-            }
+            2 -> teacherScoreQueries(TeacherScope.visibleAssessments(facts.assessments, own).map { it.assessmentId })
             else -> emptyList()
         }
     }
+
+    /** The sections [own] assigns each subject in: subjects in id order, each with its distinct sections in id order. */
+    fun sectionsBySubject(own: List<TeacherAssignment>): Map<String, List<String>> =
+        own.groupBy({ it.subjectId }, { it.sectionId }).toSortedMap()
+            .mapValues { (_, sectionIds) -> sectionIds.distinct().sorted() }
+
+    /**
+     * A teacher's assessments: per assigned subject, `subjectId == S and sectionId in [S's
+     * sections]`, at most [MAX_IN_VALUES] sections per query. The rules let a teacher read only
+     * the assessments of an assigned section + subject pair, so a query by section alone (which
+     * can match a subject someone else teaches there) is refused as a whole.
+     */
+    fun teacherAssessmentQueries(own: List<TeacherAssignment>): List<RemoteQuery> =
+        sectionsBySubject(own).flatMap { (subjectId, sectionIds) ->
+            sectionIds.chunked(MAX_IN_VALUES).map { chunk ->
+                RemoteQuery(
+                    SyncCollection.ASSESSMENTS,
+                    equalTo = listOf("subjectId" to subjectId),
+                    inField = "sectionId",
+                    inValues = chunk,
+                )
+            }
+        }
+
+    /** A teacher's marks: `assessmentId in [ids]`, at most [MAX_SCORE_IDS_PER_QUERY] distinct ids per query, in id order. */
+    fun teacherScoreQueries(assessmentIds: List<String>): List<RemoteQuery> =
+        assessmentIds.distinct().sorted().chunked(MAX_SCORE_IDS_PER_QUERY).map { chunk ->
+            RemoteQuery(SyncCollection.SCORES, inField = "assessmentId", inValues = chunk)
+        }
 
     private fun studentQueries(user: SchoolUser, phase: Int, facts: ScopeFacts): List<RemoteQuery> = when (phase) {
         // The student's auth uid is their student id (createManagedUserAccount).

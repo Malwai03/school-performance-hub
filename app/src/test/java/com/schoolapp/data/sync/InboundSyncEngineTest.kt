@@ -237,12 +237,40 @@ class InboundSyncEngineTest {
         assertThat(deviceB.ids(SyncCollection.SUBJECTS)).containsExactly("math6")
         assertThat(deviceB.ids(SyncCollection.STUDENTS)).containsExactly("s1", "s2")
         assertThat(deviceB.ids(SyncCollection.CYCLES)).containsExactly("c1")
-        assertThat(deviceB.ids(SyncCollection.ASSESSMENTS)).containsExactly("a_math", "a_sci")
+        // Only the assigned section + subject: not sci6, which someone else teaches in g6_a.
+        assertThat(deviceB.ids(SyncCollection.ASSESSMENTS)).containsExactly("a_math")
         // Marks only for the assigned section + subject; never another teacher's class.
         assertThat(deviceB.ids(SyncCollection.SCORES)).containsExactly("a_math_s1", "a_math_s2")
         assertThat(score(deviceB, "a_math_s1")!!.synced).isTrue()
         assertThat(deviceB.ids(SyncCollection.SNAPSHOTS)).isEmpty()
         assertThat(server.served.map { it.first }).doesNotContain(SyncCollection.SNAPSHOTS)
+        // The query shapes the teacher read rules allow (#18's appsync.rules.spec.ts).
+        val sent = server.requests.map { it.query }.distinct()
+        assertThat(sent.filter { it.collection == SyncCollection.ASSESSMENTS }).containsExactly(
+            RemoteQuery(SyncCollection.ASSESSMENTS, equalTo = listOf("subjectId" to "math6"), inField = "sectionId", inValues = listOf("g6_a")),
+        )
+        assertThat(sent.filter { it.collection == SyncCollection.SCORES }).containsExactly(
+            RemoteQuery(SyncCollection.SCORES, inField = "assessmentId", inValues = listOf("a_math")),
+        )
+    }
+
+    @Test
+    fun `a teacher with many assessments downloads every mark, 8 assessment ids per request`() = runTest {
+        section("g6_a", 6); subject("math6", 6); subject("sci6", 6); cycle("c1")
+        studentDoc("s1", "g6_a")
+        assignmentDoc("g6_a", "math6", teacher.uid)
+        val mine = (1..20).map { "m%02d".format(it) }
+        mine.forEach { assessmentDoc(it, "g6_a", "math6"); scoreDoc(it, "s1", 50.0) }
+        assessmentDoc("not_mine", "g6_a", "sci6"); scoreDoc("not_mine", "s1", 40.0)
+        val device = FakeDevice()
+
+        assertThat(engine(device).sync(teacher).outcome).isEqualTo(SyncOutcome.DONE)
+
+        assertThat(device.ids(SyncCollection.ASSESSMENTS)).containsExactlyElementsIn(mine)
+        assertThat(device.ids(SyncCollection.SCORES)).containsExactlyElementsIn(mine.map { "${it}_s1" })
+        val scoreQueries = server.requests.map { it.query }.filter { it.collection == SyncCollection.SCORES }.distinct()
+        assertThat(scoreQueries.map { it.inValues.size }).containsExactly(8, 8, 4)
+        assertThat(server.requests.filter { it.query.collection == SyncCollection.SCORES }.all { it.query.inValues.size <= 8 }).isTrue()
     }
 
     @Test

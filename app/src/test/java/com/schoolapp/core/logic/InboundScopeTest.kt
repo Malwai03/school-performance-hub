@@ -58,8 +58,116 @@ class InboundScopeTest {
             RemoteQuery(SyncCollection.SUBJECTS, docIds = listOf("math6")),
             RemoteQuery(SyncCollection.CYCLES),
             RemoteQuery(SyncCollection.STUDENTS, inField = "sectionId", inValues = listOf("g6_a", "g6_b")),
-            RemoteQuery(SyncCollection.ASSESSMENTS, inField = "sectionId", inValues = listOf("g6_a", "g6_b")),
+            RemoteQuery(
+                SyncCollection.ASSESSMENTS,
+                equalTo = listOf("subjectId" to "math6"),
+                inField = "sectionId",
+                inValues = listOf("g6_a", "g6_b"),
+            ),
         )
+    }
+
+    // The shapes #18's teacher rules allow (backend/functions/test/appsync.rules.spec.ts): assessments
+    // by subjectId == S and sectionId in [S's sections], scores by at most 8 assessment ids.
+    @Test
+    fun `a teacher asks for assessments one assigned subject at a time, over that subject's sections`() {
+        val facts = InboundScope.ScopeFacts(
+            assignments = listOf(
+                // appsync.rules.spec.ts's teacher: math in g1_a, science in g1_b.
+                assignment("g1_b", "science"),
+                assignment("g1_a", "math"),
+                assignment("g2_a", "history", uid = "other-teacher"),
+            ),
+        )
+        val assessments = InboundScope.queries(teacher, 1, facts).filter { it.collection == SyncCollection.ASSESSMENTS }
+        assertThat(assessments).containsExactly(
+            RemoteQuery(SyncCollection.ASSESSMENTS, equalTo = listOf("subjectId" to "math"), inField = "sectionId", inValues = listOf("g1_a")),
+            RemoteQuery(SyncCollection.ASSESSMENTS, equalTo = listOf("subjectId" to "science"), inField = "sectionId", inValues = listOf("g1_b")),
+        ).inOrder()
+    }
+
+    @Test
+    fun `no teacher assessments query is by section alone, which the rules refuse`() {
+        val facts = InboundScope.ScopeFacts(
+            assignments = listOf(assignment("g6_a", "math6"), assignment("g6_a", "sci6"), assignment("g7_a", "math6")),
+        )
+        val assessments = InboundScope.queries(teacher, 1, facts).filter { it.collection == SyncCollection.ASSESSMENTS }
+        assertThat(assessments).isNotEmpty()
+        assessments.forEach { query ->
+            assertThat(query.equalTo.map { it.first }).containsExactly("subjectId")
+            assertThat(query.inField).isEqualTo("sectionId")
+            val subjectId = query.equalTo.single().second
+            // Every (section, subject) pair the query can match is one the teacher is assigned.
+            query.inValues.forEach { sectionId ->
+                assertThat(facts.assignments.any { it.sectionId == sectionId && it.subjectId == subjectId }).isTrue()
+            }
+        }
+    }
+
+    @Test
+    fun `assignments are grouped by subject, with each subject's sections distinct and sorted`() {
+        val own = listOf(
+            assignment("g7_a", "sci"),
+            assignment("g6_b", "math"),
+            assignment("g6_a", "math"),
+            assignment("g6_a", "sci"),
+            // A duplicate (same pair under another id) asks for the section once.
+            TeacherAssignment("dup", school, "g6_b", "math", teacher.uid),
+        )
+        val grouped = InboundScope.sectionsBySubject(own)
+        assertThat(grouped).containsExactly("math", listOf("g6_a", "g6_b"), "sci", listOf("g6_a", "g7_a")).inOrder()
+        assertThat(InboundScope.sectionsBySubject(emptyList())).isEmpty()
+    }
+
+    @Test
+    fun `a subject assigned in many sections splits its sections at Firestore's 30-value limit`() {
+        val sections = (1..65).map { "s%03d".format(it) }
+        val own = sections.map { assignment(it, "math") } + assignment("s001", "sci")
+        val queries = InboundScope.teacherAssessmentQueries(own)
+        assertThat(queries.map { it.equalTo.single() to it.inValues.size }).containsExactly(
+            ("subjectId" to "math") to 30,
+            ("subjectId" to "math") to 30,
+            ("subjectId" to "math") to 5,
+            ("subjectId" to "sci") to 1,
+        ).inOrder()
+        assertThat(queries.filter { it.equalTo.single().second == "math" }.flatMap { it.inValues })
+            .containsExactlyElementsIn(sections).inOrder()
+    }
+
+    @Test
+    fun `assessments of a subject the teacher no longer teaches in a section drop out of Room`() {
+        val queries = InboundScope.teacherAssessmentQueries(listOf(assignment("g6_a", "math6")))
+        val rows = listOf(
+            LocalRow("a_math", mapOf("sectionId" to "g6_a", "subjectId" to "math6")),
+            LocalRow("a_sci", mapOf("sectionId" to "g6_a", "subjectId" to "sci6")),
+            LocalRow("a_other", mapOf("sectionId" to "g6_b", "subjectId" to "math6")),
+        )
+        assertThat(InboundScope.outOfScope(rows, queries)).containsExactly("a_sci", "a_other")
+    }
+
+    @Test
+    fun `marks are asked for at most 8 assessment ids per query`() {
+        assertThat(InboundScope.MAX_SCORE_IDS_PER_QUERY).isEqualTo(8)
+        val ids = (1..30).map { "a%02d".format(it) }
+        val queries = InboundScope.teacherScoreQueries(ids.reversed() + ids.take(3))
+        assertThat(queries.map { it.inValues.size }).containsExactly(8, 8, 8, 6).inOrder()
+        assertThat(queries.all { it.collection == SyncCollection.SCORES && it.inField == "assessmentId" && it.equalTo.isEmpty() }).isTrue()
+        assertThat(queries.flatMap { it.inValues }).containsExactlyElementsIn(ids).inOrder()
+        assertThat(InboundScope.teacherScoreQueries(emptyList())).isEmpty()
+        assertThat(InboundScope.teacherScoreQueries((1..8).map { "a$it" })).hasSize(1)
+        assertThat(InboundScope.teacherScoreQueries((1..9).map { "a$it" }).map { it.inValues.size }).containsExactly(8, 1).inOrder()
+    }
+
+    @Test
+    fun `a teacher with many assigned assessments downloads their marks in chunks of 8`() {
+        val facts = InboundScope.ScopeFacts(
+            assignments = listOf(assignment("g6_a", "math6")),
+            assessments = (1..20).map { assessment("m%02d".format(it), "g6_a", "math6") } +
+                assessment("not_mine", "g6_a", "sci6"),
+        )
+        val scores = InboundScope.queries(teacher, 2, facts)
+        assertThat(scores.map { it.inValues.size }).containsExactly(8, 8, 4).inOrder()
+        assertThat(scores.flatMap { it.inValues }).doesNotContain("not_mine")
     }
 
     @Test
