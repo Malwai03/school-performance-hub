@@ -13,21 +13,23 @@ describe("rules CI gate", () => {
   const firestore = suite("security.rules.spec.ts");
   const storage = suite("storage.rules.spec.ts");
   const score = suite("score.rules.spec.ts");
+  const appsync = suite("appsync.rules.spec.ts");
 
   beforeEach(() => { jest.spyOn(console, "log").mockImplementation(() => {}); });
   afterEach(() => { jest.restoreAllMocks(); });
 
   test("accepts executed tests from every rules suite", () => {
     const reporter = new RulesReporter();
-    reporter.onRunComplete(new Set(), { testResults: [firestore, storage, score] });
+    reporter.onRunComplete(new Set(), { testResults: [firestore, storage, score, appsync] });
     expect(reporter.getLastError()).toBeUndefined();
   });
 
   test.each([
-    ["missing suite", [firestore, storage]],
-    ["empty suite", [firestore, suite("storage.rules.spec.ts", 0), score]],
-    ["skipped test", [firestore, suite("storage.rules.spec.ts", 1, 1), score]],
-    ["todo test", [firestore, storage, suite("score.rules.spec.ts", 1, 0, 1)]],
+    ["missing suite", [firestore, storage, score]],
+    ["empty suite", [firestore, suite("storage.rules.spec.ts", 0), score, appsync]],
+    ["skipped test", [firestore, suite("storage.rules.spec.ts", 1, 1), score, appsync]],
+    ["todo test", [firestore, storage, suite("score.rules.spec.ts", 1, 0, 1), appsync]],
+    ["skipped app sync test", [firestore, storage, score, suite("appsync.rules.spec.ts", 1, 1)]],
   ])("rejects a green Jest result with a %s", (_label, testResults) => {
     const reporter = new RulesReporter();
     reporter.onRunComplete(new Set(), { testResults });
@@ -37,7 +39,7 @@ describe("rules CI gate", () => {
   test("rejects skips in any additional rules suite", () => {
     const reporter = new RulesReporter();
     reporter.onRunComplete(new Set(), {
-      testResults: [firestore, storage, score], numPendingTests: 1, numPendingTestSuites: 1,
+      testResults: [firestore, storage, score, appsync], numPendingTests: 1, numPendingTestSuites: 1,
     });
     expect(reporter.getLastError()).toBeInstanceOf(Error);
   });
