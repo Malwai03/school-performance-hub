@@ -8,7 +8,10 @@
   "scripts": {
     "build": "tsc",
     "clean": "rimraf lib",
-    "test": "jest --runInBand"
+    "test": "npm run test:unit",
+    "test:unit": "jest --config jest.config.cjs --runInBand",
+    "test:rules": "npx --yes firebase-tools@13.35.1 emulators:exec --project demo-school-rules --config ../../firebase.rules-test.json --only firestore,storage \"npm run test:rules:run\"",
+    "test:rules:run": "jest --config jest.rules.config.cjs --runInBand --json --outputFile=rules-test-results.json"
   },
   "dependencies": {
     "csv-parse": "^5.5.6",

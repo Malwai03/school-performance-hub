@@ -16,7 +16,7 @@ withEmulators("storage rules: imports are per school", () => {
 
   beforeAll(async () => {
     env = await initializeTestEnvironment({
-      projectId: "school-app-test",
+      projectId: "demo-school-rules", // matches rules-fixtures.ts and firebase.rules-test.json
       firestore: { rules: fs.readFileSync(path.join(__dirname, "../../firestore/firestore.rules"), "utf8") },
       storage: { rules: fs.readFileSync(path.join(__dirname, "../../storage/storage.rules"), "utf8") },
     });

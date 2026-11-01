@@ -30,9 +30,13 @@ service cloud.firestore {
       return hasUserRecord(schoolId) && userData(schoolId).role == "STUDENT";
     }
 
+    // createManagedUserAccount links a student profile through linkedStudentId and uses the
+    // student id as the auth uid; older profiles carry studentId. A blank or missing id never matches.
     function isStudentSelf(schoolId, studentId) {
-      return isStudent(schoolId) && (
-        userData(schoolId).studentId == studentId || request.auth.uid == studentId
+      return isStudent(schoolId) && studentId is string && studentId.size() > 0 && (
+        userData(schoolId).get("linkedStudentId", null) == studentId ||
+        userData(schoolId).get("studentId", null) == studentId ||
+        request.auth.uid == studentId
       );
     }
 
@@ -53,7 +57,27 @@ service cloud.firestore {
 
     function hasValidScoreBounds(schoolId, assessmentId, marks) {
       let assessment = assessmentDoc(schoolId, assessmentId);
-      return assessment != null && marks >= 0 && marks <= assessment.maxMarks;
+      return assessment != null && marks is number &&
+        marks >= 0 && marks <= assessment.maxMarks;
+    }
+
+    function hasValidScore(schoolId, scoreId) {
+      let score = request.resource.data;
+      let assessment = assessmentDoc(schoolId, score.assessmentId);
+      let student = get(/databases/$(database)/documents/schools/$(schoolId)/students/$(score.studentId)).data;
+      return score.scoreId == scoreId &&
+        score.assessmentId is string && score.assessmentId.size() > 0 &&
+        score.studentId is string && score.studentId.size() > 0 &&
+        assessment != null && student != null &&
+        assessment.sectionId is string && assessment.sectionId.size() > 0 &&
+        student.sectionId == assessment.sectionId &&
+        hasValidScoreBounds(schoolId, score.assessmentId, score.obtainedMarks);
+    }
+
+    function canWriteScore(schoolId, scoreId) {
+      return (isAdmin(schoolId) ||
+        isAssignedTeacherForAssessment(schoolId, request.resource.data.assessmentId)) &&
+        hasValidScore(schoolId, scoreId);
     }
 
     match /schools/{schoolId} {
@@ -100,24 +124,24 @@ service cloud.firestore {
       }
 
       match /scores/{scoreId} {
-        allow read: if isAdmin(schoolId) || isTeacher(schoolId) || (
-          isStudent(schoolId) && resource.data.studentId == userData(schoolId).studentId
-        );
+        allow read: if isAdmin(schoolId) || isTeacher(schoolId) ||
+          isStudentSelf(schoolId, resource.data.studentId);
 
-        allow create, update: if (
-          isAdmin(schoolId) ||
-          (
-            isAssignedTeacherForAssessment(schoolId, request.resource.data.assessmentId) &&
-            hasValidScoreBounds(schoolId, request.resource.data.assessmentId, request.resource.data.obtainedMarks)
-          )
-        );
+        allow create: if canWriteScore(schoolId, scoreId);
+
+        // Reassignment requires a separate, audited operation; ordinary grading
+        // can change marks/status but never the identity of an existing score.
+        allow update: if canWriteScore(schoolId, scoreId) &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(["scoreId", "assessmentId", "studentId"]);
 
         allow delete: if isAdmin(schoolId);
       }
 
       match /resultSnapshots/{snapshotId} {
         allow read: if isAdmin(schoolId) || isTeacher(schoolId) || (
-          isStudent(schoolId) && resource.data.studentId == userData(schoolId).studentId
+          isStudentSelf(schoolId, resource.data.studentId) &&
+          get(/databases/$(database)/documents/schools/$(schoolId)/assessmentCycles/$(resource.data.cycleId)).data.published == true
         );
         allow create, update, delete: if false;
       }

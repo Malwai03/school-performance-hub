@@ -1,0 +1,45 @@
+name: Backend tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend/functions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/functions/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      - run: npm run build
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Firestore and Storage rules (no skipped suites)
+        run: npm run test:rules
+      - name: Upload rules test counts and emulator logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rules-test-results
+          if-no-files-found: warn
+          path: |
+            backend/functions/rules-test-results.json
+            **/firebase-debug.log
+            **/firestore-debug.log
+            **/storage-debug.log
