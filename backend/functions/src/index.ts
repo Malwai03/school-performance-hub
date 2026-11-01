@@ -8,6 +8,7 @@ import { getStorage } from "firebase-admin/storage";
 import { getMessaging } from "firebase-admin/messaging";
 import { parse as parseCsv } from "csv-parse/sync";
 import * as XLSX from "xlsx";
+import { requireAdminForSchool, requireImportFileRef, requireManagedLoginInSchool } from "./schoolAuth";
 
 if (!getApps().length) {
   initializeApp();
@@ -55,14 +56,9 @@ type ResultPayload = {
   riskLevel: RiskLevel;
 };
 
-function requireAdmin(auth: { token?: Record<string, unknown> } | null | undefined): void {
-  if (!auth) {
-    throw new HttpsError("unauthenticated", "Authentication required");
-  }
-  const role = String(auth.token?.role ?? "");
-  if (role !== "ADMIN") {
-    throw new HttpsError("permission-denied", "Admin role required");
-  }
+async function adminMembership(schoolId: string, uid: string): Promise<Record<string, unknown> | null> {
+  const snap = await db.collection("schools").doc(schoolId).collection("users").doc(uid).get();
+  return snap.exists ? (snap.data() ?? {}) : null;
 }
 
 function round2(value: number): number {
@@ -217,8 +213,7 @@ async function parseImportedRows(fileRef: string, type: "csv" | "xlsx"): Promise
 }
 
 export const createManagedUserAccount = onCall({ region: REGION }, async (request) => {
-  requireAdmin(request.auth);
-  const schoolId = String(request.data?.schoolId || "").trim() || "school_001";
+  const schoolId = await requireAdminForSchool(request.auth, request.data?.schoolId, adminMembership);
   const role = String(request.data?.role || "").trim().toUpperCase();
   const loginCode = String(request.data?.loginCode || "").trim().toLowerCase();
   const displayName = String(request.data?.displayName || "").trim();
@@ -309,8 +304,7 @@ export const createManagedUserAccount = onCall({ region: REGION }, async (reques
 });
 
 export const resetManagedUserPassword = onCall({ region: REGION }, async (request) => {
-  requireAdmin(request.auth);
-  const schoolId = String(request.data?.schoolId || "").trim() || "school_001";
+  const schoolId = await requireAdminForSchool(request.auth, request.data?.schoolId, adminMembership);
   const loginCode = String(request.data?.loginCode || "").trim().toLowerCase();
   if (!loginCode || /\s/.test(loginCode)) {
     throw new HttpsError("invalid-argument", "Valid login code is required");
@@ -324,6 +318,15 @@ export const resetManagedUserPassword = onCall({ region: REGION }, async (reques
   const doc = userSnap.docs[0];
   const data = doc.data();
   const role = String(data.role || "STUDENT").toUpperCase();
+
+  let loginClaims: Record<string, unknown> | undefined;
+  try {
+    loginClaims = (await adminAuth.getUser(doc.id)).customClaims;
+  } catch (error) {
+    logger.error("resetManagedUserPassword getUser failed", error);
+    throw new HttpsError("not-found", "Account not found for login code");
+  }
+  requireManagedLoginInSchool(loginClaims, schoolId);
 
   const temporaryPassword = generateTemporaryPassword();
   try {
@@ -691,15 +694,12 @@ async function notifySectionPublish(schoolId: string, sectionId: string, cycleId
 }
 
 export const importCsv = onCall({ region: REGION }, async (request) => {
-  requireAdmin(request.auth);
-
-  const schoolId = String(request.data.schoolId || "");
-  const entityType = String(request.data.entityType || "");
-  const fileRef = String(request.data.fileRef || "");
-
-  if (!schoolId || !entityType || !fileRef) {
-    throw new HttpsError("invalid-argument", "schoolId, entityType and fileRef are required");
+  const schoolId = await requireAdminForSchool(request.auth, request.data?.schoolId, adminMembership);
+  const entityType = String(request.data?.entityType || "");
+  if (!entityType) {
+    throw new HttpsError("invalid-argument", "entityType is required");
   }
+  const fileRef = requireImportFileRef(schoolId, request.data?.fileRef);
 
   const rows = await parseImportedRows(fileRef, "csv");
   const result = await writeImportedEntities(schoolId, entityType, rows);
@@ -708,15 +708,12 @@ export const importCsv = onCall({ region: REGION }, async (request) => {
 });
 
 export const importExcel = onCall({ region: REGION }, async (request) => {
-  requireAdmin(request.auth);
-
-  const schoolId = String(request.data.schoolId || "");
-  const entityType = String(request.data.entityType || "");
-  const fileRef = String(request.data.fileRef || "");
-
-  if (!schoolId || !entityType || !fileRef) {
-    throw new HttpsError("invalid-argument", "schoolId, entityType and fileRef are required");
+  const schoolId = await requireAdminForSchool(request.auth, request.data?.schoolId, adminMembership);
+  const entityType = String(request.data?.entityType || "");
+  if (!entityType) {
+    throw new HttpsError("invalid-argument", "entityType is required");
   }
+  const fileRef = requireImportFileRef(schoolId, request.data?.fileRef);
 
   const rows = await parseImportedRows(fileRef, "xlsx");
   const result = await writeImportedEntities(schoolId, entityType, rows);
@@ -725,14 +722,12 @@ export const importExcel = onCall({ region: REGION }, async (request) => {
 });
 
 export const publishCycleResults = onCall({ region: REGION }, async (request) => {
-  requireAdmin(request.auth);
+  const schoolId = await requireAdminForSchool(request.auth, request.data?.schoolId, adminMembership);
+  const cycleId = String(request.data?.cycleId || "");
+  const sectionId = String(request.data?.sectionId || "");
 
-  const schoolId = String(request.data.schoolId || "");
-  const cycleId = String(request.data.cycleId || "");
-  const sectionId = String(request.data.sectionId || "");
-
-  if (!schoolId || !cycleId || !sectionId) {
-    throw new HttpsError("invalid-argument", "schoolId, cycleId and sectionId are required");
+  if (!cycleId || !sectionId) {
+    throw new HttpsError("invalid-argument", "cycleId and sectionId are required");
   }
 
   const summary = await computeAndPersistSectionResults(schoolId, cycleId, sectionId);
